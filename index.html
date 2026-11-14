@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101312" />
+    <meta name="description" content="Vaultbreak — a co-op dungeon FPS prototype." />
+    <title>VAULTBREAK // Prototype 01</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div class="vignette"></div>
+
+    <section id="menu" class="menu-screen">
+      <header class="topbar">
+        <a class="brand" href="/"><span class="brand-mark">V</span> VAULTBREAK<span class="brand-tag">ALPHA</span></a>
+        <div class="build">BUILD 0.1.0 <span class="online-dot"></span> SYSTEM READY</div>
+      </header>
+      <div class="menu-content">
+        <div class="eyebrow"><span>OPERATION 001</span> / SINGLE PLAYER PROTOTYPE</div>
+        <h1>THE SUNKEN<br /><span>VAULT</span></h1>
+        <p class="brief">Descend. Clear the chamber. Survive.</p>
+        <div class="loadout-bar">
+          <label>PRIMARY<select id="weapon-select"><option value="rifle">M4A1 / RIFLE</option><option value="pistol">M9 / PISTOL</option></select></label>
+          <label class="attachment"><input id="optic" type="checkbox" /> RED DOT</label>
+          <label class="attachment"><input id="grip" type="checkbox" /> GRIP</label>
+          <label class="attachment"><input id="magazine" type="checkbox" /> EXT. MAG</label>
+        </div>
+        <div class="coop-row"><label>CO-OP ROOM <input id="room-code" maxlength="6" placeholder="OPTIONAL CODE" autocomplete="off" /></label><button id="create-room" type="button">CREATE CODE</button></div>
+        <button id="deploy" class="deploy"><span>DEPLOY</span><kbd>ENTER</kbd></button>
+        <div class="controls">
+          <div><kbd>W A S D</kbd><span>MOVE</span></div>
+          <div><kbd>MOUSE</kbd><span>AIM / FIRE</span></div>
+          <div><kbd>R</kbd><span>RELOAD</span></div>
+          <div><kbd>SHIFT</kbd><span>SPRINT</span></div>
+          <div><kbd>SPACE</kbd><span>JUMP</span></div>
+          <div><kbd>C</kbd><span>CROUCH / SLIDE</span></div>
+        </div>
+      </div>
+      <aside class="mission-card">
+        <div class="card-label">MISSION BRIEF</div>
+        <div class="mission-line"><span>LOCATION</span><strong>VAULT 07 / SUBLEVEL 3</strong></div>
+        <div class="mission-line"><span>OBJECTIVE</span><strong>ELIMINATE ALL HOSTILES</strong></div>
+        <div class="mission-line"><span>THREAT LEVEL</span><strong class="accent">MODERATE</strong></div>
+        <div class="weapon-preview"><span>STANDARD ISSUE</span><strong>M4A1</strong><small>AUTO RIFLE · 30 ROUNDS</small></div>
+      </aside>
+      <footer class="menu-footer"><span>DESKTOP EXPERIENCE · HEADPHONES RECOMMENDED</span><span>2–4 PLAYER CO-OP ONLINE</span></footer>
+    </section>
+
+    <section id="hud" class="hud hidden">
+      <div id="room-status" class="room-status"></div>
+      <div id="boss" class="boss hidden"><small>THE WARDEN</small><div><i id="boss-health"></i></div></div>
+      <div class="hud-top">
+        <div class="mission"><small>VAULT 07 / SUBLEVEL 3</small><strong>CLEAR THE CHAMBER</strong></div>
+        <div class="enemy-counter"><span id="enemy-count">06</span><small>HOSTILES<br />REMAINING</small></div>
+      </div>
+      <div id="hitmarker" class="hitmarker"><i></i><i></i><i></i><i></i></div>
+      <div class="crosshair"><i></i><i></i><i></i><i></i><b></b></div>
+      <div id="damage" class="damage-overlay"></div>
+      <div class="revive"><span id="revive-prompt"></span><div><i id="revive-progress"></i></div></div>
+      <div class="hud-bottom">
+        <div class="vitals"><small>OPERATIVE 01</small><div><span id="health">100</span><b>HP</b></div><div class="health-track"><i id="health-bar"></i></div></div>
+        <div id="message" class="combat-message"></div>
+        <div class="ammo"><small><i id="weapon-name">M4A1</i> <span id="weapon-mode">AUTO</span></small><div><span id="ammo">30</span><b>/ 120</b></div><div id="reload-label" class="reload-label"></div></div>
+      </div>
+      <div class="hud-help">[R] RELOAD <span>·</span> [SPACE] JUMP <span>·</span> [C] CROUCH / SLIDE <span>·</span> [ESC] PAUSE</div>
+    </section>
+
+    <section id="pause" class="overlay hidden">
+      <div class="result-card"><div class="eyebrow">OPERATION PAUSED</div><h2>TAKE A BREATH.</h2><p>The vault will wait.</p><button id="resume" class="deploy">RESUME</button><button id="restart-pause" class="text-button">RESTART OPERATION</button></div>
+    </section>
+    <section id="result" class="overlay hidden">
+      <div class="result-card"><div id="result-label" class="eyebrow"></div><h2 id="result-title"></h2><p id="result-copy"></p><div class="result-stats"><div><span id="stat-kills">0</span><small>ELIMINATIONS</small></div><div><span id="stat-shots">0</span><small>SHOTS FIRED</small></div><div><span id="stat-time">0:00</span><small>TIME</small></div></div><button id="restart" class="deploy">RUN IT AGAIN</button></div>
+    </section>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
