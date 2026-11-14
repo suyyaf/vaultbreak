@@ -23,6 +23,7 @@ export interface PlayerState {
   pitch: number;
   downed: boolean;
   reviveProgress: number;
+  kills: number;
 }
 
 export interface WorldState {
@@ -41,7 +42,7 @@ export interface WorldState {
 export type ServerMessage =
   | { type: 'joined'; id: string; room: string }
   | { type: 'state'; state: WorldState }
-  | { type: 'hit' }
+  | { type: 'hit'; killed: boolean }
   | { type: 'damaged'; health: number }
   | { type: 'notice'; message: string }
   | { type: 'error'; message: string };

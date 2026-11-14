@@ -8,6 +8,7 @@ import { ENEMY_SPAWNS, GATE_Z, STAGE_NAMES, SUPPLIES } from './dungeon';
 import { GameMode, ZombieKind, ZOMBIE_SPAWNS, zombieDamage, zombieHealth, zombieKind, zombieSpeed, zombieWaveSize } from './modes';
 import { PerkId, PERKS } from './perks';
 import { buildWeaponModel } from './weaponModels';
+import { CombatAudio } from './audio';
 
 export type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
 export interface GameEvents {
@@ -15,7 +16,7 @@ export interface GameEvents {
   onWeapon: (weapon: WeaponSpec) => void;
   onHealth: (health: number) => void;
   onEnemies: (remaining: number) => void;
-  onHit: () => void;
+  onHit: (killed: boolean) => void;
   onDamage: () => void;
   onReload: (reloading: boolean) => void;
   onMessage: (message: string) => void;
@@ -27,6 +28,7 @@ export interface GameEvents {
   onBoss: (health: number, maxHealth: number) => void;
   onObjective: (message: string) => void;
   onWave: (wave: number) => void;
+  onSpread: (spread: number) => void;
 }
 
 interface Enemy {
@@ -77,6 +79,9 @@ export class Game {
   private recoil = 0;
   private walkTime = 0;
   private audio?: AudioContext;
+  private combatAudio?: CombatAudio;
+  private weaponKick = 0;
+  private lastEmptySound = 0;
   private pointerLocked = false;
   private socket?: WebSocket;
   private playerId = '';
@@ -159,16 +164,24 @@ export class Game {
     });
     this.socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data)) as ServerMessage;
+      if (message.type === 'state' && !this.lastWorld && this.state === 'playing') {
+        const spawn = message.state.players.find((player) => player.id === this.playerId);
+        if (spawn) this.camera.position.set(spawn.x, spawn.y, spawn.z);
+      }
       if (message.type === 'joined') {
         this.playerId = message.id;
         this.events.onMessage(`ROOM ${message.room} CONNECTED`);
       } else if (message.type === 'state') this.applyWorld(message.state);
-      else if (message.type === 'hit') this.events.onHit();
+      else if (message.type === 'hit') {
+        this.events.onHit(message.killed);
+        this.combatAudio?.hit(message.killed);
+      }
       else if (message.type === 'damaged') {
         const wasAlive = this.health > 0;
         const previousHealth = this.health;
         this.health = message.health;
         this.events.onHealth(this.health);
+        if (wasAlive && message.health < previousHealth) this.combatAudio?.damage();
         if (message.health === 0 && this.lastWorld && this.lastWorld.players.length > 1) {
           this.downed = true;
           this.events.onMessage('DOWNED — WAITING FOR REVIVE');
@@ -177,6 +190,7 @@ export class Game {
           this.camera.position.y = Math.max(this.camera.position.y, 1.05);
         }
         if (wasAlive && message.health < previousHealth) this.events.onDamage();
+        if (message.health > previousHealth && this.lastWorld && this.lastWorld.elapsed < 0.2) this.camera.position.y = Math.max(this.camera.position.y, 1.7);
       } else if (message.type === 'notice') this.events.onMessage(message.message);
       else if (message.type === 'error') this.events.onMessage(message.message);
     });
@@ -208,8 +222,11 @@ export class Game {
     this.events.onWave(this.wave);
     this.nextWaveAt = world.nextWaveAt;
     this.waveBreak = world.nextWaveAt > 0;
-    this.networkStartedAt = performance.now() - world.elapsed * 1000;
-    this.networkClockOffset = performance.now() - world.elapsed * 1000 - Date.now();
+    const serverNow = Date.now();
+    const networkNow = performance.now();
+    const clockOffset = networkNow - world.elapsed * 1000 - serverNow;
+    this.networkStartedAt = serverNow + clockOffset - world.elapsed * 1000;
+    this.networkClockOffset = clockOffset;
     const me = world.players.find((player) => player.id === this.playerId);
     this.downed = me?.downed ?? false;
     if (this.isCoop && this.mode === 'zombies') this.nextWaveAt += this.networkClockOffset;
@@ -226,7 +243,7 @@ export class Game {
       enemy.root.setEnabled(state.alive);
       if (state.boss) this.events.onBoss(state.health, 800);
     }
-    this.kills = world.enemies.filter((enemy) => !enemy.alive).length;
+    this.kills = me?.kills ?? 0;
     this.events.onEnemies(world.enemies.filter((enemy) => enemy.stage === world.stage && enemy.alive).length);
     this.stage = world.stage;
     if (this.mode === 'dungeon') this.updateStage(world.stage, this.lastStageEvent !== world.stage);
@@ -287,6 +304,7 @@ export class Game {
     this.camera.rotation.set(0, 0, 0);
     this.lockPointer();
     this.audio ??= new AudioContext();
+    this.combatAudio ??= new CombatAudio(this.audio);
     void this.audio.resume();
   }
 
@@ -336,13 +354,15 @@ export class Game {
     for (const mesh of this.supplyMeshes.values()) mesh.setEnabled(false);
     for (const gate of this.gates) gate.checkCollisions = true;
     this.sendNetwork({ type: 'restart' });
-    this.sendNetwork({ type: 'loadout', weapon: this.weapon.id, loadout: this.loadout });
+    this.sendNetwork({ type: 'loadout', weapon: this.weapon.id, loadout: this.loadout, perk: this.perk });
     for (const enemy of this.enemies) {
       const meta = enemy.root.metadata as { boss: boolean; stage: number; zombie?: boolean; kind?: ZombieKind };
       enemy.alive = this.mode === 'zombies' ? !!meta.zombie && enemy.phase < zombieWaveSize(1) : !meta.zombie;
       enemy.windupUntil = 0;
       enemy.telegraph?.setEnabled(false);
       enemy.health = meta.boss ? 800 : meta.zombie ? zombieHealth(1, meta.kind) : 100;
+      enemy.root.rotation.set(0, 0, 0);
+      enemy.hitAt = 0;
       enemy.root.setEnabled(enemy.alive);
       enemy.attackAt = performance.now() + 1500;
       enemy.root.position.copyFrom((enemy.root.metadata as { spawn: Vector3 }).spawn);
@@ -795,7 +815,9 @@ export class Game {
     const targetZ = (reloading ? -0.72 : this.aiming ? -0.48 : this.weaponBaseZ);
     this.gun.position.x += (targetX - this.gun.position.x) * dt * 14;
     this.gun.position.y += (targetY - this.gun.position.y) * dt * 14;
-    this.gun.position.z += (targetZ + this.recoil - this.gun.position.z) * dt * 18;
+    this.gun.position.z += (targetZ + this.recoil - this.gun.position.z) * Math.min(1, dt * 18);
+    const movementSpread = moving ? 3 : 0;
+    this.events.onSpread((this.aiming ? 0 : this.weapon.spread * 75) + movementSpread + this.recoil * 90);
   }
 
   private updateWeapon(dt: number) {
@@ -804,9 +826,10 @@ export class Game {
       const cycle = Math.max(0, Math.min(1, 1 - (this.nextShot - performance.now()) / this.weapon.fireDelay));
       this.pumpMesh.position.z = this.weapon.id === 'shotgun' && this.nextShot > performance.now() ? -Math.sin(cycle * Math.PI) * 0.18 : 0;
     }
-    this.gun.rotation.z = 0;
-    this.gun.rotation.x = 0;
-    if (this.magazineMesh) this.magazineMesh.position.y = -0.22;
+    this.weaponKick *= Math.max(0, 1 - dt * 18);
+    this.gun.rotation.z = Math.sin(this.walkTime * 0.5) * (this.aiming ? 0.002 : 0.008);
+    this.gun.rotation.x = this.weaponKick;
+    if (this.magazineMesh) this.magazineMesh.position.y = this.weapon.id === 'pistol' ? -0.25 : -0.285;
     if (this.sliding) {
       this.gun.rotation.z = -0.12;
       this.gun.rotation.x = 0.08;
@@ -817,7 +840,7 @@ export class Game {
       this.gun.rotation.z = tilt * 0.65;
       this.gun.rotation.x = tilt * 0.55;
       if (this.magazineMesh) {
-        if (progress < 0.4) this.magazineMesh.position.y = -0.22 - Math.sin(progress / 0.4 * Math.PI / 2) * 0.7;
+        if (progress < 0.4) this.magazineMesh.position.y = (this.weapon.id === 'pistol' ? -0.25 : -0.285) - Math.sin(progress / 0.4 * Math.PI / 2) * 0.7;
         else if (progress < 0.7) this.magazineMesh.position.y = -0.92;
         else this.magazineMesh.position.y = -0.92 + ((progress - 0.7) / 0.3) * 0.7;
       }
@@ -832,7 +855,13 @@ export class Game {
       this.events.onReload(false);
     }
     if (this.firing && this.triggerReady && !this.reloadAt && performance.now() >= this.nextShot) {
-      if (this.ammo <= 0) this.reload();
+      if (this.ammo <= 0) {
+        if (performance.now() > this.lastEmptySound) {
+          this.lastEmptySound = performance.now() + 350;
+          this.combatAudio?.empty();
+        }
+        this.reload();
+      }
       else {
         this.shoot();
         if (!this.weapon.automatic) this.triggerReady = false;
@@ -845,7 +874,7 @@ export class Game {
     this.reloadStartedAt = performance.now();
     this.reloadAt = this.reloadStartedAt + this.weapon.reloadMs;
     this.events.onReload(true);
-    this.sound(160, 0.06, 0.04);
+    this.combatAudio?.reload(this.weapon.id);
   }
 
   private shoot() {
@@ -853,11 +882,12 @@ export class Game {
     this.nextShot = now + this.weapon.fireDelay;
     this.ammo--;
     this.shots++;
-    this.recoil = Math.min(0.09, this.recoil + 0.035);
+    this.recoil = Math.min(0.09, this.recoil + (this.weapon.id === 'shotgun' ? 0.065 : 0.035));
+    this.weaponKick = this.weapon.id === 'shotgun' ? 0.14 : this.weapon.id === 'pistol' ? 0.09 : 0.055;
     this.camera.rotation.x -= this.weapon.recoil * (this.aiming ? 0.5 : 1);
     this.camera.rotation.y += (Math.random() - 0.5) * this.weapon.recoil;
     this.events.onAmmo(this.ammo, this.reserve);
-    this.sound(75, 0.045, 0.1);
+    this.combatAudio?.weapon(this.weapon.id);
     this.muzzle.setEnabled(true);
     setTimeout(() => this.muzzle.setEnabled(false), 35);
 
@@ -892,8 +922,9 @@ export class Game {
   private damageEnemy(enemy: Enemy, damage: number) {
     enemy.health -= damage;
     enemy.hitAt = 150;
-    this.events.onHit();
-    this.sound(420, 0.025, 0.025);
+    const killed = enemy.health <= 0;
+    this.events.onHit(killed);
+    this.combatAudio?.hit(killed);
     if (enemy.health <= 0) {
       enemy.alive = false;
       enemy.root.setEnabled(false);
@@ -970,7 +1001,7 @@ export class Game {
         this.events.onAmmo(this.ammo, this.reserve);
         this.events.onMessage('+60 AMMO');
       }
-      this.sound(660, 0.12, 0.05);
+      this.combatAudio?.pickup();
     }
   }
 
@@ -997,7 +1028,21 @@ export class Game {
         enemy.root.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
         if (distance > (meta.zombie ? 1.65 : 5)) {
           const step = toPlayer.scale(dt * (meta.zombie ? zombieSpeed(this.wave, meta.kind ?? 'walker') : 1.25));
-          const next = enemy.root.position.add(step);
+          let separationX = 0;
+          let separationZ = 0;
+          for (const other of this.enemies) {
+            if (other === enemy || !other.alive) continue;
+            const otherMeta = other.root.metadata as { zombie?: boolean; stage: number };
+            if (!!otherMeta.zombie !== !!meta.zombie || otherMeta.stage !== meta.stage) continue;
+            const dx = enemy.root.position.x - other.root.position.x;
+            const dz = enemy.root.position.z - other.root.position.z;
+            const gap = Math.hypot(dx, dz);
+            if (gap > 0.001 && gap < 0.9) {
+              separationX += dx / gap * (0.9 - gap);
+              separationZ += dz / gap * (0.9 - gap);
+            }
+          }
+          const next = enemy.root.position.add(step).add(new Vector3(separationX * dt * 4, 0, separationZ * dt * 4));
           if (Math.abs(next.x) < 12.8 && (this.mode === 'zombies' ? next.z > -21.5 && next.z < 21.5 : next.z > -114 && next.z < 21.5) && !this.blocked(next)) {
             enemy.root.position.copyFrom(next);
           } else {
@@ -1042,7 +1087,7 @@ export class Game {
     this.health = Math.max(0, this.health - amount);
     this.events.onHealth(this.health);
     this.events.onDamage();
-    this.sound(48, 0.12, 0.07);
+    this.combatAudio?.damage();
     if (this.health <= 0) this.finish(false);
   }
 
@@ -1054,17 +1099,4 @@ export class Game {
     this.events.onEnd(won, this.kills, this.shots, Math.floor((performance.now() - start) / 1000));
   }
 
-  private sound(frequency: number, duration: number, volume: number) {
-    if (!this.audio) return;
-    const oscillator = this.audio.createOscillator();
-    const gain = this.audio.createGain();
-    oscillator.type = 'sawtooth';
-    oscillator.frequency.setValueAtTime(frequency, this.audio.currentTime);
-    oscillator.frequency.exponentialRampToValueAtTime(30, this.audio.currentTime + duration);
-    gain.gain.setValueAtTime(volume, this.audio.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, this.audio.currentTime + duration);
-    oscillator.connect(gain).connect(this.audio.destination);
-    oscillator.start();
-    oscillator.stop(this.audio.currentTime + duration);
-  }
 }

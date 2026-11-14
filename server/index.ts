@@ -47,6 +47,11 @@ class Room {
     for (const client of this.clients) {
       client.health = PERKS[client.perk].maxHealth;
       client.nextShotAt = 0;
+      client.player.kills = 0;
+      client.player.downed = false;
+      client.player.reviveProgress = 0;
+      client.player.yaw = 0;
+      client.player.pitch = 0;
       client.downedAt = 0;
       client.reviveStartedAt = 0;
       client.reviverId = '';
@@ -61,7 +66,7 @@ class Room {
     if (!this.clients.size) this.mode = mode;
     this.clients.add(client);
     client.room = this.code;
-    client.player = { id: client.player.id, x: (this.clients.size - 1) * 1.5, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0 };
+    client.player = { id: client.player.id, x: (this.clients.size - 1) * 1.5, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0 };
     this.send(client, { type: 'joined', id: client.player.id, room: this.code });
     if (!this.timer) this.timer = setInterval(() => this.tick(), 50);
   }
@@ -76,17 +81,6 @@ class Room {
 
   message(client: Client, data: { type: string; [key: string]: unknown }) {
     if (data.type === 'restart') { this.reset(); return; }
-    if (this.mode === 'zombies' && data.type === 'supply') {
-      const supplyId = Number(data.supplyId);
-      const supply = SUPPLIES.find((entry) => entry.id === supplyId);
-      if (!supply || this.supplies.has(supplyId) || Math.hypot(supply.x - client.player.x, supply.z - client.player.z) > 2) return;
-      this.supplies.add(supplyId);
-      if (supply.kind === 'health') {
-        client.health = Math.min(PERKS[client.perk].maxHealth, client.health + 50);
-        this.send(client, { type: 'damaged', health: client.health });
-      }
-      return;
-    }
     if (data.type === 'state') {
       const values = data as unknown as PlayerState;
       if (![values.x, values.y, values.z, values.yaw, values.pitch].every(Number.isFinite)) return;
@@ -119,7 +113,8 @@ class Room {
       const damage = weapon.damage * (data.headshot ? 2 : 1) * pellets * falloff;
       enemy.health -= damage;
       this.send(client, { type: 'hit' });
-      if (enemy.health <= 0) { enemy.health = 0; enemy.alive = false; }
+      if (enemy.health <= 0) { enemy.health = 0; enemy.alive = false; client.player.kills++; }
+      this.send(client, { type: 'hit', killed: !enemy.alive });
       if (this.enemies.every((entry) => entry.stage !== this.stage || !entry.alive)) {
         if (this.mode === 'zombies') {
           if (!this.nextWaveAt) {
@@ -208,6 +203,18 @@ class Room {
           let nz = enemy.z + dz / distance * speed;
           if (this.blocked(nx, nz)) { nx = enemy.x + dz / distance * speed; nz = enemy.z - dx / distance * speed; }
           if (!this.blocked(nx, nz)) { enemy.x = nx; enemy.z = nz; }
+          for (const other of this.enemies) {
+            if (other === enemy || !other.alive || other.stage !== enemy.stage || other.zombie !== enemy.zombie) continue;
+            const sx = enemy.x - other.x;
+            const sz = enemy.z - other.z;
+            const gap = Math.hypot(sx, sz);
+            if (gap > 0.001 && gap < 0.9) {
+              const push = (0.9 - gap) * 0.22;
+              const px = enemy.x + sx / gap * push;
+              const pz = enemy.z + sz / gap * push;
+              if (!this.blocked(px, pz) && Math.abs(px) < 12.8 && pz > -114 && pz < 21.5) { enemy.x = px; enemy.z = pz; }
+            }
+          }
         }
         if (distance < (enemy.zombie ? 1.9 : 18)) {
           const lastAttack = (enemy as EnemyState & { attackAt?: number }).attackAt ?? 0;
@@ -268,7 +275,7 @@ const wss = new WebSocketServer({ port });
 const rooms = new Map<string, Room>();
 let nextId = 1;
 wss.on('connection', (ws) => {
-  const client: Client = { ws, room: '', health: 100, weapon: 'rifle', perk: 'runner', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0 } };
+  const client: Client = { ws, room: '', health: 100, weapon: 'rifle', perk: 'runner', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0 } };
   ws.on('message', (raw) => {
     try {
       const data = JSON.parse(raw.toString()) as { type: string; room?: string; mode?: string };

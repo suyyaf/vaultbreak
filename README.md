@@ -34,8 +34,8 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 ## Development roadmap
 
 1. **Current — playable systems and visual pass:** dungeon, co-op, zombie survival, three distinct weapon models, tactical perks, infected variants, character movement, hit reactions, and boss attack telegraphs.
-2. **Next — balance and polish:** weapon feel, enemy pacing, wave difficulty, audio, UI, and performance based on complete solo/co-op playtests.
-3. **Then — progression:** unlocks, map objectives, and more tactical choices after the core combat is stable.
+2. **Current — combat polish:** weapon-specific synthesized audio, smoother handling, responsive crosshair and hit feedback, and separated enemy hordes. Co-op tracks individual eliminations and resets downed players correctly.
+3. **Next — balance and content:** weapon feel, enemy pacing, wave difficulty, UI, and performance based on complete solo/co-op playtests, followed by unlocks and new objectives.
 4. **Later — expansion:** more weapons, maps, and objectives.
 
 ## Arsenal and perks

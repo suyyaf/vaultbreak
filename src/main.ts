@@ -27,7 +27,8 @@ const game = new Game(engine, {
     byId('health-bar').style.background = health <= 30 ? '#ef634e' : '';
   },
   onEnemies: (remaining) => { byId('enemy-count').textContent = String(remaining).padStart(2, '0'); },
-  onHit: () => {
+  onHit: (killed) => {
+    byId('hitmarker').classList.toggle('kill', killed);
     byId('hitmarker').classList.add('show');
     clearTimeout(hitTimer);
     hitTimer = setTimeout(() => byId('hitmarker').classList.remove('show'), 90);
@@ -65,6 +66,7 @@ const game = new Game(engine, {
     byId('boss').classList.toggle('hidden', health <= 0);
     byId('boss-health').style.width = `${Math.max(0, health / maxHealth * 100)}%`;
   },
+  onSpread: (spread) => { byId('crosshair').style.setProperty('--spread', `${spread}px`); },
   onPause: () => {
     if (game.currentState !== 'paused') return;
     byId('pause').classList.remove('hidden');
