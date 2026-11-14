@@ -1,4 +1,4 @@
-export type WeaponId = 'rifle' | 'pistol';
+export type WeaponId = 'rifle' | 'pistol' | 'shotgun';
 
 export interface WeaponSpec {
   id: WeaponId;
@@ -12,11 +12,14 @@ export interface WeaponSpec {
   automatic: boolean;
   spread: number;
   recoil: number;
+  pellets: number;
+  range: number;
 }
 
 export const WEAPONS: Record<WeaponId, WeaponSpec> = {
-  rifle: { id: 'rifle', name: 'M4A1', mode: 'AUTO', damage: 34, magazine: 30, reserve: 120, fireDelay: 110, reloadMs: 1600, automatic: true, spread: 0.006, recoil: 0.006 },
-  pistol: { id: 'pistol', name: 'M9', mode: 'SEMI', damage: 50, magazine: 15, reserve: 60, fireDelay: 240, reloadMs: 1200, automatic: false, spread: 0.004, recoil: 0.009 },
+  rifle: { id: 'rifle', name: 'M4A1', mode: 'AUTO', damage: 34, magazine: 30, reserve: 120, fireDelay: 110, reloadMs: 1600, automatic: true, spread: 0.006, recoil: 0.006, pellets: 1, range: 60 },
+  pistol: { id: 'pistol', name: 'M9', mode: 'SEMI', damage: 50, magazine: 15, reserve: 60, fireDelay: 240, reloadMs: 1200, automatic: false, spread: 0.004, recoil: 0.009, pellets: 1, range: 50 },
+  shotgun: { id: 'shotgun', name: 'M870', mode: 'PUMP', damage: 18, magazine: 6, reserve: 36, fireDelay: 850, reloadMs: 2100, automatic: false, spread: 0.085, recoil: 0.025, pellets: 8, range: 24 },
 };
 
 export interface Loadout {
@@ -26,7 +29,7 @@ export interface Loadout {
 }
 
 export function getWeapon(id: WeaponId, loadout: Loadout): WeaponSpec {
-  const base = WEAPONS[id];
+  const base = WEAPONS[id] ?? WEAPONS.rifle;
   return {
     ...base,
     magazine: base.magazine + (loadout.magazine ? Math.ceil(base.magazine * 0.5) : 0),

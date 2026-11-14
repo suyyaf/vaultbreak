@@ -25,11 +25,12 @@
         <p class="brief">Descend. Clear the chamber. Survive.</p>
         <div class="loadout-bar"><label>MODE<select id="mode-select"><option value="dungeon">DUNGEON OPERATION</option><option value="zombies">ZOMBIE SURVIVAL</option></select></label></div>
         <div class="loadout-bar">
-          <label>PRIMARY<select id="weapon-select"><option value="rifle">M4A1 / RIFLE</option><option value="pistol">M9 / PISTOL</option></select></label>
+          <label>PRIMARY<select id="weapon-select"><option value="rifle">M4A1 / RIFLE</option><option value="pistol">M9 / PISTOL</option><option value="shotgun">M870 / SHOTGUN</option></select></label>
           <label class="attachment"><input id="optic" type="checkbox" /> RED DOT</label>
           <label class="attachment"><input id="grip" type="checkbox" /> GRIP</label>
           <label class="attachment"><input id="magazine" type="checkbox" /> EXT. MAG</label>
         </div>
+        <div class="loadout-bar"><label>TACTICAL PERK<select id="perk-select"><option value="runner">RUNNER · +15% SPEED</option><option value="scavenger">SCAVENGER · +50% AMMO</option><option value="juggernaut">JUGGERNAUT · 125 HP</option></select></label></div>
         <div class="coop-row"><label>CO-OP ROOM <input id="room-code" maxlength="6" placeholder="OPTIONAL CODE" autocomplete="off" /></label><button id="create-room" type="button">CREATE CODE</button></div>
         <button id="deploy" class="deploy"><span>DEPLOY</span><kbd>ENTER</kbd></button>
         <div class="controls">

@@ -33,10 +33,21 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 
 ## Development roadmap
 
-1. **Current — playable systems:** dungeon, co-op, and zombie survival; fix mechanics as they are added.
-2. **Next — model and animation pass:** more readable low-poly weapon silhouettes, distinct infected variants, character movement, hit reactions, and boss attack telegraphs.
-3. **Then — balance and polish:** weapon feel, enemy pacing, wave difficulty, audio, UI, and performance based on complete solo/co-op playtests.
-4. **Later — expansion:** more weapons, maps, objectives, and progression after the core modes are stable.
+1. **Current — playable systems and visual pass:** dungeon, co-op, zombie survival, three distinct weapon models, tactical perks, infected variants, character movement, hit reactions, and boss attack telegraphs.
+2. **Next — balance and polish:** weapon feel, enemy pacing, wave difficulty, audio, UI, and performance based on complete solo/co-op playtests.
+3. **Then — progression:** unlocks, map objectives, and more tactical choices after the core combat is stable.
+4. **Later — expansion:** more weapons, maps, and objectives.
+
+## Arsenal and perks
+
+- **M4A1:** automatic rifle, 30 rounds, controllable recoil.
+- **M9:** semi-automatic pistol, 15 rounds, high single-shot damage.
+- **M870:** pump-action shotgun, six shells, eight simulated pellets, range falloff, animated pump.
+- **Runner:** +15% movement speed.
+- **Scavenger:** +50% reserve ammunition.
+- **Juggernaut:** 125 maximum health with a slight speed penalty.
+
+Zombie waves introduce fast, fragile runners and slow, durable brutes from wave two. Heavy infected and the Warden display an attack wind-up before dealing damage.
 
 Models remain intentionally low-poly; fine-tuning means better shape, readability, animation, and feedback rather than unnecessary detail.
 

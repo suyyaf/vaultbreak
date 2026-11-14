@@ -1,6 +1,7 @@
 import { Engine } from '@babylonjs/core';
 import { Game } from './game';
 import { WeaponId } from './weapons';
+import { PerkId, PERKS } from './perks';
 import './style.css';
 
 const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -22,7 +23,7 @@ const game = new Game(engine, {
   },
   onHealth: (health) => {
     byId('health').textContent = String(health);
-    byId('health-bar').style.width = `${health}%`;
+    byId('health-bar').style.width = `${Math.min(100, health / PERKS[byId<HTMLSelectElement>('perk-select').value as PerkId].maxHealth * 100)}%`;
     byId('health-bar').style.background = health <= 30 ? '#ef634e' : '';
   },
   onEnemies: (remaining) => { byId('enemy-count').textContent = String(remaining).padStart(2, '0'); },
@@ -59,6 +60,7 @@ const game = new Game(engine, {
     const objective = document.querySelector('.mission strong')!;
     if (objective.textContent !== message) objective.textContent = message;
   },
+  onWave: (wave) => { byId('hud').dataset.wave = String(wave); },
   onBoss: (health, maxHealth) => {
     byId('boss').classList.toggle('hidden', health <= 0);
     byId('boss-health').style.width = `${Math.max(0, health / maxHealth * 100)}%`;
@@ -71,7 +73,7 @@ const game = new Game(engine, {
     byId('pause').classList.add('hidden');
     byId('result').classList.remove('hidden');
     const zombies = byId<HTMLSelectElement>('mode-select').value === 'zombies';
-    byId('result-label').textContent = zombies ? `SURVIVED TO WAVE ${document.querySelector('.mission strong')?.textContent?.match(/\d+/)?.[0] ?? '1'}` : won ? 'OPERATION COMPLETE' : 'OPERATIVE DOWN';
+    byId('result-label').textContent = zombies ? `SURVIVED TO WAVE ${byId('hud').dataset.wave ?? '1'}` : won ? 'OPERATION COMPLETE' : 'OPERATIVE DOWN';
     byId('result-title').textContent = zombies ? 'THE OUTBREAK CONTINUES.' : won ? 'VAULT SECURED.' : 'YOU DIDN’T MAKE IT.';
     byId('result-copy').textContent = won ? 'The chamber is clear. Nice work, operative.' : 'Regroup, reload, and give it another shot.';
     byId('stat-kills').textContent = String(kills);
@@ -82,6 +84,7 @@ const game = new Game(engine, {
 
 function deploy() {
   game.setMode(byId<HTMLSelectElement>('mode-select').value as 'dungeon' | 'zombies');
+  game.setPerk(byId<HTMLSelectElement>('perk-select').value as PerkId);
   game.setLoadout(byId<HTMLSelectElement>('weapon-select').value as WeaponId, {
     optic: byId<HTMLInputElement>('optic').checked,
     grip: byId<HTMLInputElement>('grip').checked,
@@ -97,6 +100,18 @@ function deploy() {
   game.start();
 }
 
+byId('mode-select').addEventListener('change', () => {
+  const zombies = byId<HTMLSelectElement>('mode-select').value === 'zombies';
+  document.querySelector('.eyebrow span')!.textContent = zombies ? 'SURVIVAL PROTOCOL' : 'OPERATION 001';
+  document.querySelector('h1')!.innerHTML = zombies ? 'ZOMBIE<br /><span>SURVIVAL</span>' : 'THE SUNKEN<br /><span>VAULT</span>';
+  document.querySelector('.brief')!.textContent = zombies ? 'Hold the vault. Resupply. Survive the outbreak.' : 'Descend. Clear the chamber. Survive.';
+  document.querySelector('.weapon-preview strong')!.textContent = zombies ? 'ENDLESS WAVES' : 'M4A1';
+});
+byId('weapon-select').addEventListener('change', () => {
+  const weapon = byId<HTMLSelectElement>('weapon-select');
+  const label = weapon.selectedOptions[0].textContent?.split(' / ') ?? [];
+  document.querySelector('.weapon-preview strong')!.textContent = label[0] ?? 'M4A1';
+});
 byId('create-room').addEventListener('click', () => {
   byId<HTMLInputElement>('room-code').value = Math.random().toString(36).slice(2, 8).toUpperCase();
 });

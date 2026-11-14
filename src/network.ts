@@ -1,4 +1,4 @@
-import { GameMode } from './modes';
+import { GameMode, ZombieKind } from './modes';
 
 export interface EnemyState {
   id: number;
@@ -10,6 +10,8 @@ export interface EnemyState {
   stage: number;
   boss: boolean;
   zombie: boolean;
+  kind: ZombieKind | 'soldier';
+  windupUntil: number;
 }
 
 export interface PlayerState {

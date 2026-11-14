@@ -5,7 +5,9 @@ import {
 import { getWeapon, Loadout, WeaponId, WeaponSpec } from './weapons';
 import { ServerMessage, WorldState } from './network';
 import { ENEMY_SPAWNS, GATE_Z, STAGE_NAMES, SUPPLIES } from './dungeon';
-import { GameMode, ZOMBIE_SPAWNS, zombieHealth, zombieWaveSize } from './modes';
+import { GameMode, ZombieKind, ZOMBIE_SPAWNS, zombieDamage, zombieHealth, zombieKind, zombieSpeed, zombieWaveSize } from './modes';
+import { PerkId, PERKS } from './perks';
+import { buildWeaponModel } from './weaponModels';
 
 export type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
 export interface GameEvents {
@@ -24,9 +26,11 @@ export interface GameEvents {
   onStage: (stage: number, name: string) => void;
   onBoss: (health: number, maxHealth: number) => void;
   onObjective: (message: string) => void;
+  onWave: (wave: number) => void;
 }
 
 interface Enemy {
+  id: number;
   root: TransformNode;
   body: Mesh;
   head: Mesh;
@@ -35,6 +39,9 @@ interface Enemy {
   alive: boolean;
   attackAt: number;
   phase: number;
+  hitAt: number;
+  windupUntil: number;
+  telegraph?: Mesh;
 }
 
 const UP = new Vector3(0, 1, 0);
@@ -92,7 +99,10 @@ export class Game {
   private wave = 1;
   private nextWaveAt = 0;
   private waveBreak = false;
+  private networkClockOffset = 0;
   private readonly enemyTargets = new Map<number, { position: Vector3; yaw: number }>();
+  private perk: PerkId = 'runner';
+  private pumpMesh?: TransformNode;
   private readonly teammateTargets = new Map<string, { position: Vector3; yaw: number }>();
 
   constructor(private readonly engine: Engine, private readonly events: GameEvents) {
@@ -128,10 +138,12 @@ export class Game {
 
   setMode(mode: GameMode) { this.mode = mode; }
 
+  setPerk(perk: PerkId) { this.perk = PERKS[perk] ? perk : 'runner'; }
+
   setLoadout(weapon: WeaponId, loadout: Loadout) {
     this.loadout = { ...loadout };
     this.weapon = getWeapon(weapon, loadout);
-    for (const mesh of this.gunParts) mesh.dispose();
+    for (const mesh of this.gunParts) { mesh.material?.dispose(); mesh.dispose(); }
     this.gunParts = [];
     this.buildGun();
     this.events.onWeapon(this.weapon);
@@ -143,7 +155,7 @@ export class Game {
     this.socket = new WebSocket(host);
     this.socket.addEventListener('open', () => {
       this.socket?.send(JSON.stringify({ type: 'join', room, mode: this.mode }));
-      this.socket?.send(JSON.stringify({ type: 'loadout', weapon: this.weapon.id, loadout: this.loadout }));
+      this.socket?.send(JSON.stringify({ type: 'loadout', weapon: this.weapon.id, loadout: this.loadout, perk: this.perk }));
     });
     this.socket.addEventListener('message', (event) => {
       const message = JSON.parse(String(event.data)) as ServerMessage;
@@ -193,18 +205,24 @@ export class Game {
     this.lastWorld = world;
     this.mode = world.mode;
     this.wave = world.wave;
+    this.events.onWave(this.wave);
     this.nextWaveAt = world.nextWaveAt;
     this.waveBreak = world.nextWaveAt > 0;
     this.networkStartedAt = performance.now() - world.elapsed * 1000;
+    this.networkClockOffset = performance.now() - world.elapsed * 1000 - Date.now();
     const me = world.players.find((player) => player.id === this.playerId);
     this.downed = me?.downed ?? false;
+    if (this.isCoop && this.mode === 'zombies') this.nextWaveAt += this.networkClockOffset;
     this.reviveTarget = world.players.find((player) => player.downed && player.id !== this.playerId && Math.hypot(player.x - this.camera.position.x, player.z - this.camera.position.z) < 2.8)?.id;
     for (const state of world.enemies) {
       const enemy = this.enemies[state.id];
       if (!enemy) continue;
+      if (state.zombie && state.kind !== 'soldier') this.applyZombieKind(enemy, state.kind);
       this.enemyTargets.set(state.id, { position: new Vector3(state.x, 0, state.z), yaw: state.yaw });
+      if (state.health < enemy.health) enemy.hitAt = 150;
       enemy.health = state.health;
       enemy.alive = state.alive;
+      enemy.windupUntil = state.windupUntil ? this.networkClock(state.windupUntil) : 0;
       enemy.root.setEnabled(state.alive);
       if (state.boss) this.events.onBoss(state.health, 800);
     }
@@ -233,16 +251,27 @@ export class Game {
     const root = new TransformNode(`teammate ${id}`, this.scene);
     const armor = this.material(new Color3(0.2, 0.33, 0.35));
     const accent = this.material(new Color3(0.4, 0.9, 0.95), 0.8);
-    const part = (w: number, h: number, d: number, x: number, y: number, mat: StandardMaterial) => {
+    const part = (w: number, h: number, d: number, x: number, y: number, z: number, mat: StandardMaterial) => {
       const mesh = MeshBuilder.CreateBox('operative', { width: w, height: h, depth: d }, this.scene);
-      mesh.parent = root; mesh.position.set(x, y, 0); mesh.material = mat; mesh.isPickable = false;
+      mesh.parent = root; mesh.position.set(x, y, z); mesh.material = mat; mesh.isPickable = false;
+      return mesh;
     };
-    part(0.7, 0.8, 0.4, 0, 1.3, armor);
-    part(0.4, 0.4, 0.4, 0, 1.95, armor);
-    part(0.3, 0.08, 0.02, 0, 1.98, accent);
-    part(0.25, 0.85, 0.27, -0.2, 0.45, armor);
-    part(0.25, 0.85, 0.27, 0.2, 0.45, armor);
-    part(0.16, 0.16, 0.85, 0.3, 1.35, armor);
+    part(0.7, 0.8, 0.4, 0, 1.3, 0, armor);
+    part(0.4, 0.4, 0.4, 0, 1.95, 0, armor);
+    part(0.3, 0.08, 0.02, 0, 1.98, 0.21, accent);
+    part(0.25, 0.85, 0.27, -0.2, 0.45, 0, armor);
+    part(0.25, 0.85, 0.27, 0.2, 0.45, 0, armor);
+    part(0.16, 0.16, 0.85, 0.3, 1.35, 0.25, armor);
+    part(0.55, 0.75, 0.2, 0, 1.35, -0.27, armor);
+    part(0.42, 0.12, 0.46, 0, 2.17, 0, armor);
+    part(0.22, 0.35, 0.18, -0.39, 1.43, 0, armor);
+    part(0.22, 0.35, 0.18, 0.39, 1.43, 0, armor);
+    part(0.28, 0.17, 0.34, -0.2, 0.53, 0.05, armor);
+    part(0.28, 0.17, 0.34, 0.2, 0.53, 0.05, armor);
+    part(0.11, 0.11, 0.95, 0.28, 1.35, 0.1, armor);
+    const barrel = part(0.055, 0.055, 0.35, 0.28, 1.35, 0, armor);
+    barrel.position.z = 0.6;
+    root.metadata = { limbs: root.getChildMeshes().filter((mesh) => mesh.name === 'operative').slice(2, 4) };
     return root;
   }
 
@@ -270,6 +299,7 @@ export class Game {
     this.enemyTargets.clear();
     this.teammateTargets.clear();
     this.wave = 1;
+    this.events.onWave(1);
     this.nextWaveAt = 0;
     this.waveBreak = false;
     if (this.mode === 'zombies') {
@@ -277,9 +307,9 @@ export class Game {
       this.gateMarker.setEnabled(false);
       this.events.onBoss(0, 800);
     }
-    this.health = 100;
+    this.health = PERKS[this.perk].maxHealth;
     this.ammo = this.weapon.magazine;
-    this.reserve = this.weapon.reserve;
+    this.reserve = Math.round(this.weapon.reserve * PERKS[this.perk].ammo);
     this.kills = 0;
     this.shots = 0;
     this.firing = false;
@@ -308,9 +338,11 @@ export class Game {
     this.sendNetwork({ type: 'restart' });
     this.sendNetwork({ type: 'loadout', weapon: this.weapon.id, loadout: this.loadout });
     for (const enemy of this.enemies) {
-      const meta = enemy.root.metadata as { boss: boolean; stage: number; zombie?: boolean };
+      const meta = enemy.root.metadata as { boss: boolean; stage: number; zombie?: boolean; kind?: ZombieKind };
       enemy.alive = this.mode === 'zombies' ? !!meta.zombie && enemy.phase < zombieWaveSize(1) : !meta.zombie;
-      enemy.health = meta.boss ? 800 : meta.zombie ? zombieHealth(1) : 100;
+      enemy.windupUntil = 0;
+      enemy.telegraph?.setEnabled(false);
+      enemy.health = meta.boss ? 800 : meta.zombie ? zombieHealth(1, meta.kind) : 100;
       enemy.root.setEnabled(enemy.alive);
       enemy.attackAt = performance.now() + 1500;
       enemy.root.position.copyFrom((enemy.root.metadata as { spawn: Vector3 }).spawn);
@@ -485,6 +517,15 @@ export class Game {
       const mat = this.material(supply.kind === 'health' ? new Color3(0.45, 0.8, 0.35) : new Color3(0.85, 0.7, 0.2), 0.45);
       const crate = MeshBuilder.CreateBox('supply', { width: 0.8, height: 0.6, depth: 0.65 }, this.scene);
       crate.parent = root; crate.material = mat; crate.isPickable = false;
+      const stripe = MeshBuilder.CreateBox('supply marking', { width: supply.kind === 'health' ? 0.42 : 0.52, height: 0.09, depth: 0.015 }, this.scene);
+      stripe.parent = root; stripe.position.set(0, 0, 0.335); stripe.material = this.material(new Color3(0.9, 0.95, 0.75), 0.5); stripe.isPickable = false;
+      if (supply.kind === 'health') {
+        const cross = MeshBuilder.CreateBox('health marking', { width: 0.09, height: 0.42, depth: 0.015 }, this.scene);
+        cross.parent = root; cross.position.set(0, 0, 0.335); cross.material = stripe.material; cross.isPickable = false;
+      } else for (const x of [-0.16, 0, 0.16]) {
+        const round = MeshBuilder.CreateCylinder('ammo marking', { diameter: 0.08, height: 0.3, tessellation: 8 }, this.scene);
+        round.parent = root; round.position.set(x, 0.05, 0.36); round.material = stripe.material; round.isPickable = false;
+      }
       this.supplyMeshes.set(supply.id, root);
     }
   }
@@ -500,42 +541,18 @@ export class Game {
   }
 
   private buildGun() {
-    const gunMat = this.material(new Color3(0.12, 0.14, 0.12));
-    const metal = this.material(new Color3(0.28, 0.3, 0.27));
-    const accent = this.material(new Color3(0.62, 0.76, 0.24), 0.35);
-    const part = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, mat = gunMat) => {
-      const mesh = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, this.scene);
-      mesh.parent = this.gun;
-      mesh.position.set(x, y, z);
-      mesh.material = mat;
-      mesh.isPickable = false;
-      mesh.checkCollisions = false;
-      this.gunParts.push(mesh);
-      return mesh;
-    };
-    part('receiver', 0.16, 0.19, 0.62, 0, 0, 0);
-    part('handguard', 0.13, 0.14, 0.55, 0, 0.025, -0.56, metal);
-    part('stock', 0.12, 0.18, 0.35, 0, -0.025, 0.46);
-    this.magazineMesh = part('magazine', 0.11, 0.32, 0.17, 0, -0.22, 0.02);
-    this.magazineMesh.rotation.x = -0.14;
-    part('grip', 0.1, 0.25, 0.12, 0, -0.19, 0.23).rotation.x = -0.3;
-    if (this.loadout.optic) {
-      part('optic base', 0.1, 0.05, 0.18, 0, 0.14, -0.04, metal);
-      part('optic', 0.1, 0.12, 0.16, 0, 0.22, -0.04);
-      part('optic glass', 0.065, 0.075, 0.008, 0, 0.22, -0.125, accent);
-    }
-    if (this.loadout.grip) part('vertical grip', 0.09, 0.25, 0.1, 0, -0.17, -0.53);
-    if (this.loadout.magazine) this.magazineMesh.scaling.y = 1.5;
-    part('barrel', 0.045, 0.045, 0.4, 0, 0.01, -0.99, metal);
-    this.muzzle = part('muzzle flash', 0.13, 0.13, 0.18, 0, 0.01, -1.25, accent);
-    this.muzzle.setEnabled(false);
+    this.pumpMesh = undefined;
+    const model = buildWeaponModel(this.scene, this.gun, this.weapon, this.loadout);
+    this.gunParts = model.parts;
+    this.magazineMesh = model.magazine;
+    this.muzzle = model.muzzle;
+    this.pumpMesh = model.pump;
     this.gun.parent = this.camera;
     this.gun.setEnabled(this.state !== 'menu');
-    if (this.weapon.id === 'pistol') this.gun.scaling.set(0.8, 1.1, 0.65);
-    else this.gun.scaling.setAll(1);
-    this.weaponBaseZ = this.weapon.id === 'pistol' ? -0.85 : -0.75;
+    this.gun.scaling.setAll(1);
+    this.weaponBaseZ = this.weapon.id === 'pistol' ? -0.75 : -0.65;
     this.gun.position.set(0.34, -0.3, this.weaponBaseZ);
-    this.gun.rotation.y = 0;
+    this.gun.rotation.set(0, 0, 0);
   }
 
   private spawnEnemies() {
@@ -560,6 +577,15 @@ export class Game {
       const head = make('head', 0.4, 0.4, 0.4, 1.98, armorMat);
       make('visor', 0.31, 0.09, 0.025, 2.01, eyeMat).position.z = 0.21;
       make('armor', 0.8, 0.36, 0.44, 1.51, armorMat);
+      make('shoulder armor', 0.28, 0.25, 0.5, 1.55, armorMat, -0.5);
+      make('shoulder armor', 0.28, 0.25, 0.5, 1.55, armorMat, 0.5);
+      make('backpack', 0.58, 0.65, 0.22, 1.32, armorMat).position.z = -0.3;
+      if (spawn.boss) {
+        make('warden chest core', 0.36, 0.36, 0.05, 1.48, eyeMat).position.z = 0.25;
+        make('warden helmet crown', 0.52, 0.16, 0.48, 2.23, armorMat);
+        make('warden shoulder blade', 0.35, 0.6, 0.28, 1.95, armorMat, -0.64).rotation.z = -0.3;
+        make('warden shoulder blade', 0.35, 0.6, 0.28, 1.95, armorMat, 0.64).rotation.z = 0.3;
+      }
       const limbs = [
         make('left leg', 0.25, 0.85, 0.27, 0.48, armorMat, -0.2),
         make('right leg', 0.25, 0.85, 0.27, 0.48, armorMat, 0.2),
@@ -570,7 +596,16 @@ export class Game {
       head.metadata = { enemyIndex: index, multiplier: 2 };
       body.isPickable = true;
       head.isPickable = true;
-      this.enemies.push({ root, body, head, limbs, health: 100, alive: true, attackAt: 0, phase: index });
+      let telegraph: Mesh | undefined;
+      if (spawn.boss) {
+        telegraph = MeshBuilder.CreateDisc('warden attack warning', { radius: 1.6, tessellation: 32 }, this.scene);
+        telegraph.parent = root;
+        telegraph.position.y = 0.025;
+        telegraph.material = this.material(new Color3(1, 0.22, 0.05), 1.5);
+        telegraph.isPickable = false;
+        telegraph.setEnabled(false);
+      }
+      this.enemies.push({ id: index, root, body, head, limbs, health: 100, alive: true, attackAt: 0, phase: index, hitAt: 0, windupUntil: 0, telegraph });
     });
   }
 
@@ -578,11 +613,17 @@ export class Game {
     const skin = this.material(new Color3(0.34, 0.43, 0.25));
     const cloth = this.material(new Color3(0.19, 0.22, 0.17));
     const eye = this.material(new Color3(0.85, 0.65, 0.15), 1.2);
+    const runnerSkin = this.material(new Color3(0.48, 0.3, 0.2));
+    const bruteSkin = this.material(new Color3(0.24, 0.34, 0.27));
     for (const spawn of ZOMBIE_SPAWNS) {
       const index = this.enemies.length;
       const root = new TransformNode(`infected ${spawn.id + 1}`, this.scene);
       root.position.set(spawn.x, 0, spawn.z);
-      root.metadata = { spawn: root.position.clone(), stage: 0, boss: false, zombie: true };
+      const kind = zombieKind(spawn.id, 1);
+      root.metadata = { spawn: root.position.clone(), stage: 0, boss: false, zombie: true, kind };
+      const skinMat = kind === 'runner' ? runnerSkin : kind === 'brute' ? bruteSkin : skin;
+      const scale = kind === 'brute' ? 1.35 : kind === 'runner' ? 0.88 : 1;
+      root.scaling.set(scale, kind === 'brute' ? 1.2 : 1, scale);
       const make = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, mat: StandardMaterial) => {
         const mesh = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, this.scene);
         mesh.parent = root;
@@ -593,21 +634,41 @@ export class Game {
       };
       const body = make('infected torso', 0.68, 0.8, 0.38, 0, 1.3, 0, cloth);
       body.rotation.x = 0.2;
-      const head = make('infected head', 0.42, 0.43, 0.4, 0, 1.91, 0.12, skin);
+      const head = make('infected head', 0.42, 0.43, 0.4, 0, 1.91, 0.12, skinMat);
       make('infected eyes', 0.29, 0.05, 0.025, 0, 1.96, 0.33, eye);
       const limbs = [
         make('infected left leg', 0.23, 0.8, 0.25, -0.2, 0.44, 0, cloth),
         make('infected right leg', 0.23, 0.8, 0.25, 0.2, 0.44, 0, cloth),
-        make('infected left arm', 0.2, 0.2, 0.72, -0.43, 1.42, 0.35, skin),
-        make('infected right arm', 0.2, 0.2, 0.72, 0.43, 1.42, 0.35, skin),
+        make('infected left arm', 0.2, 0.2, 0.72, -0.43, 1.42, 0.35, skinMat),
+        make('infected right arm', 0.2, 0.2, 0.72, 0.43, 1.42, 0.35, skinMat),
       ];
       for (const [part, multiplier] of [[body, 1], [head, 2]] as const) {
         part.metadata = { enemyIndex: index, multiplier };
         part.isPickable = true;
       }
-      this.enemies.push({ root, body, head, limbs, health: zombieHealth(1), alive: false, attackAt: 0, phase: spawn.id });
+      const telegraph = MeshBuilder.CreateDisc('attack warning', { radius: kind === 'brute' ? 1.1 : 0.75, tessellation: 24 }, this.scene);
+      telegraph.parent = root;
+      telegraph.position.y = 0.035;
+      telegraph.material = this.material(new Color3(1, 0.24, 0.07), 1.5);
+      telegraph.isPickable = false;
+      telegraph.checkCollisions = false;
+      telegraph.setEnabled(false);
+      this.enemies.push({ id: index, root, body, head, limbs, health: zombieHealth(1, kind), alive: false, attackAt: 0, phase: spawn.id, hitAt: 0, windupUntil: 0, telegraph });
       root.setEnabled(false);
     }
+  }
+
+  private networkClock(serverTime: number) { return serverTime + this.networkClockOffset; }
+
+  private applyZombieKind(enemy: Enemy, kind: ZombieKind) {
+    const meta = enemy.root.metadata as { kind?: ZombieKind };
+    if (meta.kind === kind) return;
+    meta.kind = kind;
+    const scale = kind === 'brute' ? 1.35 : kind === 'runner' ? 0.88 : 1;
+    enemy.root.scaling.set(scale, kind === 'brute' ? 1.2 : 1, scale);
+    enemy.body.material = this.material(new Color3(kind === 'brute' ? 0.24 : kind === 'runner' ? 0.32 : 0.19, kind === 'runner' ? 0.16 : 0.22, 0.17));
+    enemy.head.material = this.material(new Color3(kind === 'runner' ? 0.48 : kind === 'brute' ? 0.24 : 0.34, kind === 'runner' ? 0.3 : kind === 'brute' ? 0.34 : 0.43, kind === 'runner' ? 0.2 : kind === 'brute' ? 0.27 : 0.25));
+    for (const limb of enemy.limbs.slice(2)) limb.material = enemy.head.material;
   }
 
   private update() {
@@ -623,6 +684,7 @@ export class Game {
     this.updatePlayer(dt);
     this.updateSupplies();
     this.interpolateNetwork(dt);
+    this.animateEnemies(dt);
     if (this.mode === 'zombies') {
       if (this.waveBreak) {
         const seconds = Math.max(0, Math.ceil((this.nextWaveAt - Date.now()) / 1000));
@@ -667,6 +729,27 @@ export class Game {
       if (!model) continue;
       model.position = Vector3.Lerp(model.position, target.position, blend);
       model.rotation.y += Math.atan2(Math.sin(target.yaw - model.rotation.y), Math.cos(target.yaw - model.rotation.y)) * blend;
+      const limbs = model.metadata?.limbs as Mesh[] | undefined;
+      if (limbs && Vector3.Distance(model.position, target.position) > 0.04) limbs.forEach((limb, index) => { limb.rotation.x = Math.sin(performance.now() * 0.009 + index * Math.PI) * 0.4; });
+    }
+  }
+
+  private animateEnemies(dt: number) {
+    const now = performance.now();
+    for (const enemy of this.enemies) {
+      if (!enemy.alive) continue;
+      const target = this.isCoop ? this.enemyTargets.get(enemy.id) : undefined;
+      const moving = this.isCoop ? (target ? Vector3.Distance(target.position, enemy.root.position) > 0.04 : false) : true;
+      const meta = enemy.root.metadata as { zombie?: boolean; kind?: string; boss?: boolean };
+      if (meta.zombie && this.isCoop && this.lastWorld?.enemies[enemy.id]) this.applyZombieKind(enemy, this.lastWorld.enemies[enemy.id].kind as ZombieKind);
+      if (moving) enemy.limbs.forEach((limb, index) => { limb.rotation.x = Math.sin(now * (meta.kind === 'runner' ? 0.015 : 0.007) + index * Math.PI) * (meta.zombie ? 0.3 : 0.4); });
+      enemy.hitAt = Math.max(0, enemy.hitAt - dt * 1000);
+      enemy.root.rotation.z += ((enemy.hitAt > 0 ? 0.1 : 0) - enemy.root.rotation.z) * Math.min(1, dt * 18);
+      const windup = enemy.windupUntil > now;
+      enemy.telegraph?.setEnabled(windup && (meta.kind === 'brute' || meta.boss === true));
+      if (enemy.telegraph?.isEnabled()) enemy.telegraph.scaling.setAll(0.85 + Math.sin(now * 0.02) * 0.15);
+      enemy.body.rotation.z = windup ? Math.sin(now * 0.025) * 0.09 : enemy.hitAt > 0 ? Math.sin(enemy.hitAt * 0.04) * 0.13 : 0;
+      if (windup && meta.zombie) enemy.limbs.slice(2).forEach((limb) => { limb.rotation.x = -0.55; });
     }
   }
 
@@ -684,7 +767,7 @@ export class Game {
     if (moving) {
       move.normalize();
       const sprint = this.keys.has('ShiftLeft') && !this.aiming && !this.crouched;
-      const speed = this.crouched ? 2.2 : sprint ? 6.2 : this.aiming ? 2.7 : 4.2;
+      const speed = (this.crouched ? 2.2 : sprint ? 6.2 : this.aiming ? 2.7 : 4.2) * PERKS[this.perk].speed;
       if (!this.sliding) this.camera.cameraDirection.addInPlace(move.scale(speed * dt));
       this.walkTime += dt * (sprint ? 12 : 8);
     }
@@ -717,6 +800,10 @@ export class Game {
 
   private updateWeapon(dt: number) {
     this.recoil *= Math.max(0, 1 - dt * 15);
+    if (this.pumpMesh) {
+      const cycle = Math.max(0, Math.min(1, 1 - (this.nextShot - performance.now()) / this.weapon.fireDelay));
+      this.pumpMesh.position.z = this.weapon.id === 'shotgun' && this.nextShot > performance.now() ? -Math.sin(cycle * Math.PI) * 0.18 : 0;
+    }
     this.gun.rotation.z = 0;
     this.gun.rotation.x = 0;
     if (this.magazineMesh) this.magazineMesh.position.y = -0.22;
@@ -775,28 +862,36 @@ export class Game {
     setTimeout(() => this.muzzle.setEnabled(false), 35);
 
     const origin = this.camera.position.clone();
-    const direction = this.camera.getDirection(Vector3.Forward());
-    const spread = this.weapon.spread * (this.aiming ? 0.25 : 1);
-    direction.x += (Math.random() - 0.5) * spread;
-    direction.y += (Math.random() - 0.5) * spread;
-    direction.normalize();
-    const ray = new Ray(origin, direction);
-    const hit = this.scene.pickWithRay(ray, (mesh) => mesh.isPickable && mesh.isEnabled());
-    if (hit?.hit && hit.pickedPoint) {
+    const forward = this.camera.getDirection(Vector3.Forward());
+    const right = Vector3.Cross(UP, forward).normalize();
+    const up = Vector3.Cross(forward, right).normalize();
+    const spread = this.weapon.spread * (this.aiming ? 0.4 : 1);
+    const hits = new Map<number, { enemy: Enemy; pellets: number; headshot: boolean }>();
+    for (let pellet = 0; pellet < this.weapon.pellets; pellet++) {
+      const direction = forward.add(right.scale((Math.random() - 0.5) * spread)).add(up.scale((Math.random() - 0.5) * spread)).normalize();
+      const ray = new Ray(origin, direction, this.weapon.range);
+      const hit = this.scene.pickWithRay(ray, (mesh) => mesh.isPickable && mesh.isEnabled());
+      if (!hit?.hit || !hit.pickedPoint) continue;
       const metadata = hit.pickedMesh?.metadata as { enemyIndex?: number; multiplier?: number } | undefined;
       if (metadata?.enemyIndex !== undefined) {
         const enemy = this.enemies[metadata.enemyIndex];
-        if (enemy.alive) {
-          if (this.isCoop) this.sendNetwork({ type: 'shoot', enemyId: metadata.enemyIndex, headshot: metadata.multiplier === 2 });
-          else this.damageEnemy(enemy, this.weapon.damage * (metadata.multiplier ?? 1));
+        if (enemy.alive && enemy.root.isEnabled()) {
+          const previous = hits.get(metadata.enemyIndex);
+          hits.set(metadata.enemyIndex, { enemy, pellets: (previous?.pellets ?? 0) + 1, headshot: previous?.headshot || metadata.multiplier === 2 });
         }
       }
-      this.impact(hit.pickedPoint);
+      if (pellet < 3 || this.weapon.pellets === 1) this.impact(hit.pickedPoint);
+    }
+    for (const hit of hits.values()) {
+      const falloff = this.weapon.id === 'shotgun' ? Math.max(0.45, 1 - this.camera.position.subtract(hit.enemy.root.position).length() / this.weapon.range * 0.65) : 1;
+      if (this.isCoop) this.sendNetwork({ type: 'shoot', enemyId: hit.enemy.phase === 12 && false ? 0 : hit.enemy.id, headshot: hit.headshot, pellets: hit.pellets });
+      else this.damageEnemy(hit.enemy, this.weapon.damage * hit.pellets * (hit.headshot ? 2 : 1) * falloff);
     }
   }
 
   private damageEnemy(enemy: Enemy, damage: number) {
     enemy.health -= damage;
+    enemy.hitAt = 150;
     this.events.onHit();
     this.sound(420, 0.025, 0.025);
     if (enemy.health <= 0) {
@@ -825,14 +920,16 @@ export class Game {
 
   private spawnNextWave() {
     this.wave++;
+    this.events.onWave(this.wave);
     this.waveBreak = false;
     this.nextWaveAt = 0;
     this.collectedSupplies.clear();
     for (const enemy of this.enemies) {
-      const meta = enemy.root.metadata as { zombie?: boolean };
+      const meta = enemy.root.metadata as { zombie?: boolean; kind?: ZombieKind };
       if (!meta.zombie) continue;
+      this.applyZombieKind(enemy, zombieKind(enemy.phase, this.wave));
       enemy.alive = enemy.phase < zombieWaveSize(this.wave);
-      enemy.health = zombieHealth(this.wave);
+      enemy.health = zombieHealth(this.wave, zombieKind(enemy.phase, this.wave));
       enemy.attackAt = 0;
       enemy.root.position.copyFrom((meta as { spawn: Vector3 }).spawn);
       enemy.root.setEnabled(enemy.alive);
@@ -865,7 +962,7 @@ export class Game {
       mesh?.setEnabled(false);
       if (this.isCoop) this.sendNetwork({ type: 'supply', supplyId: supply.id });
       if (supply.kind === 'health') {
-        this.health = Math.min(100, this.health + 50);
+        this.health = Math.min(PERKS[this.perk].maxHealth, this.health + 50);
         this.events.onHealth(this.health);
         this.events.onMessage('+50 HEALTH');
       } else {
@@ -892,16 +989,16 @@ export class Game {
       const toPlayer = this.camera.position.subtract(enemy.root.position);
       toPlayer.y = 0;
       const distance = toPlayer.length();
-      const meta = enemy.root.metadata as { stage: number; boss: boolean; zombie?: boolean };
+      const meta = enemy.root.metadata as { stage: number; boss: boolean; zombie?: boolean; kind?: ZombieKind };
       if ((this.mode === 'zombies') !== !!meta.zombie) continue;
       const active = meta.stage === this.stage && now > this.startedAt + (meta.zombie ? 1200 : 3000) + enemy.phase * (meta.zombie ? 70 : 300);
       if (active && distance < 36) {
         toPlayer.normalize();
         enemy.root.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
         if (distance > (meta.zombie ? 1.65 : 5)) {
-          const step = toPlayer.scale(dt * (meta.zombie ? Math.min(3.1, 1.65 + this.wave * 0.07) : 1.25));
+          const step = toPlayer.scale(dt * (meta.zombie ? zombieSpeed(this.wave, meta.kind ?? 'walker') : 1.25));
           const next = enemy.root.position.add(step);
-          if (Math.abs(next.x) < 12.8 && next.z > -21.5 && next.z < 21.5 && !this.blocked(next)) {
+          if (Math.abs(next.x) < 12.8 && (this.mode === 'zombies' ? next.z > -21.5 && next.z < 21.5 : next.z > -114 && next.z < 21.5) && !this.blocked(next)) {
             enemy.root.position.copyFrom(next);
           } else {
             const side = new Vector3(toPlayer.z, 0, -toPlayer.x).scale(dt * (enemy.phase % 2 ? 1.1 : -1.1));
@@ -910,9 +1007,13 @@ export class Game {
           }
           enemy.limbs.forEach((limb, i) => { limb.rotation.x = Math.sin(now * 0.005 + i * Math.PI) * 0.35; });
         }
-        if (distance < (meta.zombie ? 1.9 : 13) && now >= enemy.attackAt && this.hasLineOfSight(enemy)) {
-          enemy.attackAt = now + (meta.zombie ? 850 : 1100 + Math.random() * 700);
-          this.takeDamage(meta.zombie ? 12 : distance < 6 ? 12 : 7);
+        const heavy = meta.boss || meta.kind === 'brute';
+        if (enemy.windupUntil && now >= enemy.windupUntil) {
+          enemy.windupUntil = 0;
+          if (distance < (meta.zombie ? 2.4 : 14) && this.hasLineOfSight(enemy)) this.takeDamage(meta.boss ? 24 : meta.zombie ? zombieDamage(meta.kind ?? 'walker') : distance < 6 ? 12 : 7);
+        } else if (!enemy.windupUntil && distance < (meta.zombie ? 1.9 : 13) && now >= enemy.attackAt && this.hasLineOfSight(enemy)) {
+          enemy.attackAt = now + (meta.zombie ? 900 : 1100 + Math.random() * 700);
+          enemy.windupUntil = now + (heavy ? 850 : 350);
         }
       }
     }
