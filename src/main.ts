@@ -51,7 +51,7 @@ const game = new Game(engine, {
     byId('revive-progress').style.width = `${progress * 100}%`;
   },
   onStage: (stage, name) => {
-    document.querySelector('.mission small')!.textContent = `CHAMBER ${stage + 1}/3 · ${name}`;
+    document.querySelector('.mission small')!.textContent = name === 'OUTBREAK CONTAINMENT' ? 'ZOMBIE SURVIVAL · ENDLESS' : `CHAMBER ${stage + 1}/3 · ${name}`;
     document.querySelector('.mission strong')!.textContent = stage === 2 ? 'DEFEAT THE WARDEN' : 'CLEAR THE CHAMBER';
     if (stage < 2) byId('boss').classList.add('hidden');
   },
@@ -70,8 +70,9 @@ const game = new Game(engine, {
   onEnd: (won, kills, shots, seconds) => {
     byId('pause').classList.add('hidden');
     byId('result').classList.remove('hidden');
-    byId('result-label').textContent = won ? 'OPERATION COMPLETE' : 'OPERATIVE DOWN';
-    byId('result-title').textContent = won ? 'VAULT SECURED.' : 'YOU DIDN’T MAKE IT.';
+    const zombies = byId<HTMLSelectElement>('mode-select').value === 'zombies';
+    byId('result-label').textContent = zombies ? `SURVIVED TO WAVE ${document.querySelector('.mission strong')?.textContent?.match(/\d+/)?.[0] ?? '1'}` : won ? 'OPERATION COMPLETE' : 'OPERATIVE DOWN';
+    byId('result-title').textContent = zombies ? 'THE OUTBREAK CONTINUES.' : won ? 'VAULT SECURED.' : 'YOU DIDN’T MAKE IT.';
     byId('result-copy').textContent = won ? 'The chamber is clear. Nice work, operative.' : 'Regroup, reload, and give it another shot.';
     byId('stat-kills').textContent = String(kills);
     byId('stat-shots').textContent = String(shots);
@@ -80,6 +81,7 @@ const game = new Game(engine, {
 });
 
 function deploy() {
+  game.setMode(byId<HTMLSelectElement>('mode-select').value as 'dungeon' | 'zombies');
   game.setLoadout(byId<HTMLSelectElement>('weapon-select').value as WeaponId, {
     optic: byId<HTMLInputElement>('optic').checked,
     grip: byId<HTMLInputElement>('grip').checked,

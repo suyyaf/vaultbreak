@@ -5,6 +5,7 @@ import {
 import { getWeapon, Loadout, WeaponId, WeaponSpec } from './weapons';
 import { ServerMessage, WorldState } from './network';
 import { ENEMY_SPAWNS, GATE_Z, STAGE_NAMES, SUPPLIES } from './dungeon';
+import { GameMode, ZOMBIE_SPAWNS, zombieHealth, zombieWaveSize } from './modes';
 
 export type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
 export interface GameEvents {
@@ -87,6 +88,12 @@ export class Game {
   private reloadStartedAt = 0;
   private gateMarker!: Mesh;
   private weaponBaseZ = -0.75;
+  private mode: GameMode = 'dungeon';
+  private wave = 1;
+  private nextWaveAt = 0;
+  private waveBreak = false;
+  private readonly enemyTargets = new Map<number, { position: Vector3; yaw: number }>();
+  private readonly teammateTargets = new Map<string, { position: Vector3; yaw: number }>();
 
   constructor(private readonly engine: Engine, private readonly events: GameEvents) {
     this.scene = new Scene(engine);
@@ -111,12 +118,15 @@ export class Game {
     this.buildDungeon();
     this.buildGun();
     this.spawnEnemies();
+    this.spawnZombies();
     this.buildGateMarker();
     this.bindInput();
     this.scene.onBeforeRenderObservable.add(() => this.update());
   }
 
   get currentState() { return this.state; }
+
+  setMode(mode: GameMode) { this.mode = mode; }
 
   setLoadout(weapon: WeaponId, loadout: Loadout) {
     this.loadout = { ...loadout };
@@ -132,7 +142,7 @@ export class Game {
     const host = import.meta.env.VITE_SERVER_URL ?? `ws://${location.hostname}:2567`;
     this.socket = new WebSocket(host);
     this.socket.addEventListener('open', () => {
-      this.socket?.send(JSON.stringify({ type: 'join', room }));
+      this.socket?.send(JSON.stringify({ type: 'join', room, mode: this.mode }));
       this.socket?.send(JSON.stringify({ type: 'loadout', weapon: this.weapon.id, loadout: this.loadout }));
     });
     this.socket.addEventListener('message', (event) => {
@@ -181,6 +191,10 @@ export class Game {
 
   private applyWorld(world: WorldState) {
     this.lastWorld = world;
+    this.mode = world.mode;
+    this.wave = world.wave;
+    this.nextWaveAt = world.nextWaveAt;
+    this.waveBreak = world.nextWaveAt > 0;
     this.networkStartedAt = performance.now() - world.elapsed * 1000;
     const me = world.players.find((player) => player.id === this.playerId);
     this.downed = me?.downed ?? false;
@@ -188,8 +202,7 @@ export class Game {
     for (const state of world.enemies) {
       const enemy = this.enemies[state.id];
       if (!enemy) continue;
-      enemy.root.position.set(state.x, 0, state.z);
-      enemy.root.rotation.y = state.yaw;
+      this.enemyTargets.set(state.id, { position: new Vector3(state.x, 0, state.z), yaw: state.yaw });
       enemy.health = state.health;
       enemy.alive = state.alive;
       enemy.root.setEnabled(state.alive);
@@ -198,7 +211,7 @@ export class Game {
     this.kills = world.enemies.filter((enemy) => !enemy.alive).length;
     this.events.onEnemies(world.enemies.filter((enemy) => enemy.stage === world.stage && enemy.alive).length);
     this.stage = world.stage;
-    this.updateStage(world.stage, this.lastStageEvent !== world.stage);
+    if (this.mode === 'dungeon') this.updateStage(world.stage, this.lastStageEvent !== world.stage);
     this.lastStageEvent = world.stage;
     this.collectedSupplies = new Set(world.supplies);
     for (const [id, mesh] of this.supplyMeshes) mesh.setEnabled(!this.collectedSupplies.has(id));
@@ -209,8 +222,7 @@ export class Game {
       connected.add(player.id);
       let model = this.teammates.get(player.id);
       if (!model) { model = this.createTeammate(player.id); this.teammates.set(player.id, model); }
-      model.position.set(player.x, player.y - 1.7, player.z);
-      model.rotation.y = player.yaw;
+      this.teammateTargets.set(player.id, { position: new Vector3(player.x, player.y - 1.7, player.z), yaw: player.yaw });
       model.rotation.z = player.downed ? -1.35 : 0;
       model.scaling.y = player.downed ? 0.65 : 1;
     }
@@ -255,6 +267,16 @@ export class Game {
   }
 
   reset() {
+    this.enemyTargets.clear();
+    this.teammateTargets.clear();
+    this.wave = 1;
+    this.nextWaveAt = 0;
+    this.waveBreak = false;
+    if (this.mode === 'zombies') {
+      this.gates.forEach((gate) => gate.setEnabled(false));
+      this.gateMarker.setEnabled(false);
+      this.events.onBoss(0, 800);
+    }
     this.health = 100;
     this.ammo = this.weapon.magazine;
     this.reserve = this.weapon.reserve;
@@ -273,23 +295,23 @@ export class Game {
     this.events.onWeapon(this.weapon);
     this.events.onHealth(this.health);
     this.events.onAmmo(this.ammo, this.reserve);
-    this.events.onEnemies(this.enemies.filter((enemy) => (enemy.root.metadata as { stage: number }).stage === 0).length);
+    this.events.onEnemies(this.enemies.filter((enemy) => (enemy.root.metadata as { stage: number; zombie?: boolean }).stage === 0 && (this.mode === 'zombies') === !!(enemy.root.metadata as { zombie?: boolean }).zombie && (this.mode !== 'zombies' || enemy.phase < zombieWaveSize(1))).length);
     this.events.onReload(false);
-    this.events.onStage(0, STAGE_NAMES[0]);
-    this.events.onObjective('CLEAR THE CHAMBER');
+    this.events.onStage(0, this.mode === 'zombies' ? 'OUTBREAK CONTAINMENT' : STAGE_NAMES[0]);
+    this.events.onObjective(this.mode === 'zombies' ? 'SURVIVE WAVE 1' : 'CLEAR THE CHAMBER');
     this.gateMarker?.setEnabled(false);
     this.events.onBoss(0, 800);
-    this.gates.forEach((gate) => { gate.setEnabled(true); gate.checkCollisions = true; });
+    this.gates.forEach((gate) => { gate.setEnabled(this.mode === 'dungeon'); gate.checkCollisions = this.mode === 'dungeon'; });
     this.events.onRevive('', 0);
     for (const mesh of this.supplyMeshes.values()) mesh.setEnabled(false);
     for (const gate of this.gates) gate.checkCollisions = true;
     this.sendNetwork({ type: 'restart' });
     this.sendNetwork({ type: 'loadout', weapon: this.weapon.id, loadout: this.loadout });
     for (const enemy of this.enemies) {
-      enemy.alive = true;
-      const meta = enemy.root.metadata as { boss: boolean; stage: number };
-      enemy.health = meta.boss ? 800 : 100;
-      enemy.root.setEnabled(true);
+      const meta = enemy.root.metadata as { boss: boolean; stage: number; zombie?: boolean };
+      enemy.alive = this.mode === 'zombies' ? !!meta.zombie && enemy.phase < zombieWaveSize(1) : !meta.zombie;
+      enemy.health = meta.boss ? 800 : meta.zombie ? zombieHealth(1) : 100;
+      enemy.root.setEnabled(enemy.alive);
       enemy.attackAt = performance.now() + 1500;
       enemy.root.position.copyFrom((enemy.root.metadata as { spawn: Vector3 }).spawn);
     }
@@ -552,6 +574,42 @@ export class Game {
     });
   }
 
+  private spawnZombies() {
+    const skin = this.material(new Color3(0.34, 0.43, 0.25));
+    const cloth = this.material(new Color3(0.19, 0.22, 0.17));
+    const eye = this.material(new Color3(0.85, 0.65, 0.15), 1.2);
+    for (const spawn of ZOMBIE_SPAWNS) {
+      const index = this.enemies.length;
+      const root = new TransformNode(`infected ${spawn.id + 1}`, this.scene);
+      root.position.set(spawn.x, 0, spawn.z);
+      root.metadata = { spawn: root.position.clone(), stage: 0, boss: false, zombie: true };
+      const make = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, mat: StandardMaterial) => {
+        const mesh = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, this.scene);
+        mesh.parent = root;
+        mesh.position.set(x, y, z);
+        mesh.material = mat;
+        mesh.isPickable = false;
+        return mesh;
+      };
+      const body = make('infected torso', 0.68, 0.8, 0.38, 0, 1.3, 0, cloth);
+      body.rotation.x = 0.2;
+      const head = make('infected head', 0.42, 0.43, 0.4, 0, 1.91, 0.12, skin);
+      make('infected eyes', 0.29, 0.05, 0.025, 0, 1.96, 0.33, eye);
+      const limbs = [
+        make('infected left leg', 0.23, 0.8, 0.25, -0.2, 0.44, 0, cloth),
+        make('infected right leg', 0.23, 0.8, 0.25, 0.2, 0.44, 0, cloth),
+        make('infected left arm', 0.2, 0.2, 0.72, -0.43, 1.42, 0.35, skin),
+        make('infected right arm', 0.2, 0.2, 0.72, 0.43, 1.42, 0.35, skin),
+      ];
+      for (const [part, multiplier] of [[body, 1], [head, 2]] as const) {
+        part.metadata = { enemyIndex: index, multiplier };
+        part.isPickable = true;
+      }
+      this.enemies.push({ root, body, head, limbs, health: zombieHealth(1), alive: false, attackAt: 0, phase: spawn.id });
+      root.setEnabled(false);
+    }
+  }
+
   private update() {
     const dt = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
     if (this.state === 'menu') {
@@ -564,12 +622,20 @@ export class Game {
     this.gun.setEnabled(true);
     this.updatePlayer(dt);
     this.updateSupplies();
+    this.interpolateNetwork(dt);
+    if (this.mode === 'zombies') {
+      if (this.waveBreak) {
+        const seconds = Math.max(0, Math.ceil((this.nextWaveAt - Date.now()) / 1000));
+        this.events.onObjective(`RESUPPLY — WAVE ${this.wave + 1} IN ${seconds}s`);
+      } else this.events.onObjective(`SURVIVE WAVE ${this.wave}`);
+      if (!this.isCoop && this.waveBreak && performance.now() >= this.nextWaveAt) this.spawnNextWave();
+    }
     if (this.gateMarker.isEnabled()) {
       this.gateMarker.rotation.z = performance.now() * 0.001;
       this.gateMarker.position.y = 2.7 + Math.sin(performance.now() * 0.003) * 0.15;
     }
-    if (this.stage === 1 && this.camera.position.z < -28) this.events.onObjective('CLEAR THE CHAMBER');
-    if (this.stage === 2 && this.camera.position.z < -74) this.events.onObjective('DEFEAT THE WARDEN');
+    if (this.mode === 'dungeon' && this.stage === 1 && this.camera.position.z < -28) this.events.onObjective('CLEAR THE CHAMBER');
+    if (this.mode === 'dungeon' && this.stage === 2 && this.camera.position.z < -74) this.events.onObjective('DEFEAT THE WARDEN');
     if (this.downed) {
       this.camera.position.y = Math.max(0.65, this.camera.position.y - dt * 2);
       this.gun.setEnabled(false);
@@ -585,6 +651,23 @@ export class Game {
       this.events.onRevive(this.downed ? 'DOWNED — A TEAMMATE CAN REVIVE YOU' : this.reviveTarget ? `${this.keys.has('KeyE') ? 'REVIVING' : 'HOLD [E] REVIVE'} ${this.reviveTarget}` : '', target?.reviveProgress ?? 0);
       if (this.lastWorld?.ended) this.finish(this.lastWorld.ended === 'won');
     } else this.updateEnemies(dt);
+  }
+
+  private interpolateNetwork(dt: number) {
+    if (!this.isCoop) return;
+    const blend = Math.min(1, dt * 15);
+    for (const [id, target] of this.enemyTargets) {
+      const enemy = this.enemies[id];
+      if (!enemy) continue;
+      enemy.root.position = Vector3.Lerp(enemy.root.position, target.position, blend);
+      enemy.root.rotation.y += Math.atan2(Math.sin(target.yaw - enemy.root.rotation.y), Math.cos(target.yaw - enemy.root.rotation.y)) * blend;
+    }
+    for (const [id, target] of this.teammateTargets) {
+      const model = this.teammates.get(id);
+      if (!model) continue;
+      model.position = Vector3.Lerp(model.position, target.position, blend);
+      model.rotation.y += Math.atan2(Math.sin(target.yaw - model.rotation.y), Math.cos(target.yaw - model.rotation.y)) * blend;
+    }
   }
 
   private updatePlayer(dt: number) {
@@ -722,13 +805,40 @@ export class Game {
       this.kills++;
       this.events.onEnemies(this.enemies.length - this.kills);
       this.events.onBoss(this.enemies.find((entry) => (entry.root.metadata as { boss: boolean }).boss)?.health ?? 0, 800);
-      const remaining = this.enemies.filter((entry) => (entry.root.metadata as { stage: number }).stage === this.stage && entry.alive).length;
+      const remaining = this.enemies.filter((entry) => (entry.root.metadata as { stage: number }).stage === this.stage && entry.alive && (this.mode === 'zombies') === !!(entry.root.metadata as { zombie?: boolean }).zombie).length;
       this.events.onEnemies(remaining);
       if (remaining === 0) {
-        if (this.stage === 2) this.finish(true);
+        if (this.mode === 'zombies') this.completeWave();
+        else if (this.stage === 2) this.finish(true);
         else this.updateStage(this.stage + 1, true);
       }
     }
+  }
+
+  private completeWave() {
+    if (this.waveBreak) return;
+    this.waveBreak = true;
+    this.nextWaveAt = performance.now() + 7000;
+    this.collectedSupplies.clear();
+    this.events.onMessage(`WAVE ${this.wave} CLEARED — RESUPPLY`);
+  }
+
+  private spawnNextWave() {
+    this.wave++;
+    this.waveBreak = false;
+    this.nextWaveAt = 0;
+    this.collectedSupplies.clear();
+    for (const enemy of this.enemies) {
+      const meta = enemy.root.metadata as { zombie?: boolean };
+      if (!meta.zombie) continue;
+      enemy.alive = enemy.phase < zombieWaveSize(this.wave);
+      enemy.health = zombieHealth(this.wave);
+      enemy.attackAt = 0;
+      enemy.root.position.copyFrom((meta as { spawn: Vector3 }).spawn);
+      enemy.root.setEnabled(enemy.alive);
+    }
+    this.events.onEnemies(zombieWaveSize(this.wave));
+    this.events.onMessage(`WAVE ${this.wave} INCOMING`);
   }
 
   private updateStage(stage: number, announce: boolean) {
@@ -748,7 +858,7 @@ export class Game {
     for (const supply of SUPPLIES) {
       if (this.collectedSupplies.has(supply.id)) continue;
       const mesh = this.supplyMeshes.get(supply.id);
-      const available = supply.id < 2 ? this.stage >= 1 : this.stage >= 2;
+      const available = this.mode === 'zombies' ? supply.id < 2 : supply.id < 2 ? this.stage >= 1 : this.stage >= 2;
       mesh?.setEnabled(available);
       if (!available || Math.hypot(this.camera.position.x - supply.x, this.camera.position.z - supply.z) > 1.5) continue;
       this.collectedSupplies.add(supply.id);
@@ -782,13 +892,14 @@ export class Game {
       const toPlayer = this.camera.position.subtract(enemy.root.position);
       toPlayer.y = 0;
       const distance = toPlayer.length();
-      const meta = enemy.root.metadata as { stage: number; boss: boolean };
-      const active = meta.stage === this.stage && now > this.startedAt + 3000 + enemy.phase * 300;
-      if (active && distance < 28) {
+      const meta = enemy.root.metadata as { stage: number; boss: boolean; zombie?: boolean };
+      if ((this.mode === 'zombies') !== !!meta.zombie) continue;
+      const active = meta.stage === this.stage && now > this.startedAt + (meta.zombie ? 1200 : 3000) + enemy.phase * (meta.zombie ? 70 : 300);
+      if (active && distance < 36) {
         toPlayer.normalize();
         enemy.root.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
-        if (distance > 5) {
-          const step = toPlayer.scale(dt * 1.25);
+        if (distance > (meta.zombie ? 1.65 : 5)) {
+          const step = toPlayer.scale(dt * (meta.zombie ? Math.min(3.1, 1.65 + this.wave * 0.07) : 1.25));
           const next = enemy.root.position.add(step);
           if (Math.abs(next.x) < 12.8 && next.z > -21.5 && next.z < 21.5 && !this.blocked(next)) {
             enemy.root.position.copyFrom(next);
@@ -799,9 +910,9 @@ export class Game {
           }
           enemy.limbs.forEach((limb, i) => { limb.rotation.x = Math.sin(now * 0.005 + i * Math.PI) * 0.35; });
         }
-        if (distance < 13 && now >= enemy.attackAt && this.hasLineOfSight(enemy)) {
-          enemy.attackAt = now + 1100 + Math.random() * 700;
-          this.takeDamage(distance < 6 ? 12 : 7);
+        if (distance < (meta.zombie ? 1.9 : 13) && now >= enemy.attackAt && this.hasLineOfSight(enemy)) {
+          enemy.attackAt = now + (meta.zombie ? 850 : 1100 + Math.random() * 700);
+          this.takeDamage(meta.zombie ? 12 : distance < 6 ? 12 : 7);
         }
       }
     }

@@ -2,6 +2,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { getWeapon, Loadout, WeaponId } from '../src/weapons';
 import { EnemyState, PlayerState, WorldState } from '../src/network';
 import { COVER, ENEMY_SPAWNS, GATE_Z, SUPPLIES } from '../src/dungeon';
+import { GameMode, ZOMBIE_SPAWNS, zombieHealth, zombieWaveSize } from '../src/modes';
 
 interface Client {
   ws: WebSocket;
@@ -24,12 +25,19 @@ class Room {
   ended: WorldState['ended'] = null;
   stage = 0;
   supplies = new Set<number>();
+  mode: GameMode = 'dungeon';
+  wave = 1;
+  nextWaveAt = 0;
   timer?: NodeJS.Timeout;
 
-  constructor(readonly code: string) { this.reset(); }
+  constructor(readonly code: string, mode: GameMode = 'dungeon') { this.mode = mode; this.reset(); }
 
   reset() {
-    this.enemies = ENEMY_SPAWNS.map((spawn, id) => ({ id, x: spawn.x, z: spawn.z, yaw: 0, health: spawn.boss ? 800 : 100, alive: true, stage: spawn.stage, boss: spawn.boss }));
+    this.wave = 1;
+    this.nextWaveAt = 0;
+    this.enemies = this.mode === 'zombies'
+      ? ZOMBIE_SPAWNS.map((spawn, id) => ({ id, x: spawn.x, z: spawn.z, yaw: 0, health: zombieHealth(1), alive: id < zombieWaveSize(1), stage: 0, boss: false, zombie: true }))
+      : ENEMY_SPAWNS.map((spawn, id) => ({ id, x: spawn.x, z: spawn.z, yaw: 0, health: spawn.boss ? 800 : 100, alive: true, stage: spawn.stage, boss: spawn.boss, zombie: false }));
     this.stage = 0;
     this.supplies.clear();
     this.startedAt = Date.now();
@@ -47,7 +55,8 @@ class Room {
     }
   }
 
-  join(client: Client) {
+  join(client: Client, mode: GameMode) {
+    if (!this.clients.size) this.mode = mode;
     this.clients.add(client);
     client.room = this.code;
     client.player = { id: client.player.id, x: (this.clients.size - 1) * 1.5, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0 };
@@ -65,6 +74,17 @@ class Room {
 
   message(client: Client, data: { type: string; [key: string]: unknown }) {
     if (data.type === 'restart') { this.reset(); return; }
+    if (this.mode === 'zombies' && data.type === 'supply') {
+      const supplyId = Number(data.supplyId);
+      const supply = SUPPLIES.find((entry) => entry.id === supplyId);
+      if (!supply || this.supplies.has(supplyId) || Math.hypot(supply.x - client.player.x, supply.z - client.player.z) > 2) return;
+      this.supplies.add(supplyId);
+      if (supply.kind === 'health') {
+        client.health = Math.min(100, client.health + 50);
+        this.send(client, { type: 'damaged', health: client.health });
+      }
+      return;
+    }
     if (data.type === 'state') {
       const values = data as unknown as PlayerState;
       if (![values.x, values.y, values.z, values.yaw, values.pitch].every(Number.isFinite)) return;
@@ -97,7 +117,13 @@ class Room {
       this.send(client, { type: 'hit' });
       if (enemy.health <= 0) { enemy.health = 0; enemy.alive = false; }
       if (this.enemies.every((entry) => entry.stage !== this.stage || !entry.alive)) {
-        if (this.stage === 2) this.ended = 'won';
+        if (this.mode === 'zombies') {
+          if (!this.nextWaveAt) {
+            this.nextWaveAt = Date.now() + 7000;
+            this.supplies.clear();
+            for (const player of this.clients) this.send(player, { type: 'notice', message: `WAVE ${this.wave} CLEARED — RESUPPLY` });
+          }
+        } else if (this.stage === 2) this.ended = 'won';
         else {
           this.stage++;
           for (const player of this.clients) this.send(player, { type: 'notice', message: `GATE OPEN — CHAMBER ${this.stage + 1}` });
@@ -124,6 +150,19 @@ class Room {
   tick() {
     const elapsed = (Date.now() - this.startedAt) / 1000;
     if (!this.ended) {
+      if (this.mode === 'zombies' && this.nextWaveAt && Date.now() >= this.nextWaveAt) {
+        this.wave++;
+        this.nextWaveAt = 0;
+        this.supplies.clear();
+        this.enemies.forEach((enemy, id) => {
+          const spawn = ZOMBIE_SPAWNS[id];
+          enemy.x = spawn.x;
+          enemy.z = spawn.z;
+          enemy.health = zombieHealth(this.wave);
+          enemy.alive = id < zombieWaveSize(this.wave);
+        });
+        for (const player of this.clients) this.send(player, { type: 'notice', message: `WAVE ${this.wave} INCOMING` });
+      }
       const players = Array.from(this.clients);
       for (const client of players) {
         if (!client.player.downed) continue;
@@ -154,18 +193,19 @@ class Room {
         const dz = target.player.z - enemy.z;
         const distance = Math.hypot(dx, dz);
         enemy.yaw = Math.atan2(dx, dz);
-        if (distance > 5) {
-          const speed = 1.25 * 0.05;
+        const attackDistance = enemy.zombie ? 1.65 : 5;
+        if (distance > attackDistance) {
+          const speed = (enemy.zombie ? Math.min(3.1, 1.65 + this.wave * 0.07) : 1.25) * 0.05;
           let nx = enemy.x + dx / distance * speed;
           let nz = enemy.z + dz / distance * speed;
           if (this.blocked(nx, nz)) { nx = enemy.x + dz / distance * speed; nz = enemy.z - dx / distance * speed; }
           if (!this.blocked(nx, nz)) { enemy.x = nx; enemy.z = nz; }
         }
-        if (distance < 18) {
+        if (distance < (enemy.zombie ? 1.9 : 18)) {
           const lastAttack = (enemy as EnemyState & { attackAt?: number }).attackAt ?? 0;
           if (Date.now() >= lastAttack && this.lineOfSight(enemy, target.player)) {
-            (enemy as EnemyState & { attackAt?: number }).attackAt = Date.now() + 1100 + Math.random() * 700;
-            target.health = Math.max(0, target.health - (enemy.boss ? 18 : distance < 6 ? 10 : 5));
+            (enemy as EnemyState & { attackAt?: number }).attackAt = Date.now() + (enemy.zombie ? 850 : 1100 + Math.random() * 700);
+            target.health = Math.max(0, target.health - (enemy.boss ? 18 : enemy.zombie ? 12 : distance < 6 ? 10 : 5));
             if (target.health === 0 && !target.player.downed) {
               if (this.clients.size > 1) {
                 target.player.downed = true;
@@ -189,6 +229,9 @@ class Room {
       ended: this.ended,
       stage: this.stage,
       supplies: Array.from(this.supplies),
+      mode: this.mode,
+      wave: this.wave,
+      nextWaveAt: this.nextWaveAt,
     };
     for (const client of this.clients) this.send(client, { type: 'state', state });
   }
@@ -215,14 +258,15 @@ wss.on('connection', (ws) => {
   const client: Client = { ws, room: '', health: 100, weapon: 'rifle', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0 } };
   ws.on('message', (raw) => {
     try {
-      const data = JSON.parse(raw.toString()) as { type: string; room?: string };
+      const data = JSON.parse(raw.toString()) as { type: string; room?: string; mode?: string };
       if (data.type === 'join') {
         const code = String(data.room ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
         if (!code) return;
-        const room = rooms.get(code) ?? new Room(code);
+        const mode: GameMode = data.mode === 'zombies' ? 'zombies' : 'dungeon';
+        const room = rooms.get(code) ?? new Room(code, mode);
         if (room.clients.size >= 4) { ws.send(JSON.stringify({ type: 'error', message: 'Room is full.' })); return; }
         rooms.set(code, room);
-        room.join(client);
+        room.join(client, mode);
       } else if (client.room) rooms.get(client.room)?.message(client, data);
     } catch { /* Ignore malformed client messages. */ }
   });

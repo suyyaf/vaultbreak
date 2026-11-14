@@ -1,3 +1,5 @@
+import { GameMode } from './modes';
+
 export interface EnemyState {
   id: number;
   x: number;
@@ -7,6 +9,7 @@ export interface EnemyState {
   alive: boolean;
   stage: number;
   boss: boolean;
+  zombie: boolean;
 }
 
 export interface PlayerState {
@@ -28,6 +31,9 @@ export interface WorldState {
   ended: 'won' | 'lost' | null;
   stage: number;
   supplies: number[];
+  mode: GameMode;
+  wave: number;
+  nextWaveAt: number;
 }
 
 export type ServerMessage =
