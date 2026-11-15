@@ -49,6 +49,6 @@ export type ServerMessage =
   | { type: 'hit'; killed: boolean }
   | { type: 'damaged'; health: number }
   | { type: 'notice'; message: string }
-  | { type: 'equipment'; grenades: number }
+  | { type: 'equipment'; grenades: number; medkits?: number }
   | { type: 'explosion'; x: number; y: number; z: number }
   | { type: 'error'; message: string };

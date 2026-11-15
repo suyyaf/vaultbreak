@@ -20,6 +20,8 @@ interface Client {
   reviverId: string;
   grenades: number;
   nextGrenadeAt: number;
+  medkits: number;
+  nextMedkitAt: number;
 }
 
 
@@ -59,6 +61,9 @@ class Room {
       client.nextShotAt = 0;
       client.grenades = GRENADE_CAPACITY;
       client.nextGrenadeAt = 0;
+      client.medkits = 2;
+      client.nextMedkitAt = 0;
+      this.send(client, { type: 'equipment', grenades: client.grenades, medkits: client.medkits });
       this.send(client, { type: 'equipment', grenades: client.grenades });
       client.player.kills = 0;
       client.player.downed = false;
@@ -81,7 +86,7 @@ class Room {
     client.room = this.code;
     client.player = { id: client.player.id, x: (this.clients.size - 1) * 1.5, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0, health: 100 };
     this.send(client, { type: 'joined', id: client.player.id, room: this.code });
-    this.send(client, { type: 'equipment', grenades: client.grenades });
+    this.send(client, { type: 'equipment', grenades: client.grenades, medkits: client.medkits });
     if (!this.timer) this.timer = setInterval(() => this.tick(), 50);
   }
 
@@ -124,11 +129,19 @@ class Room {
       if (distance > weapon.range || !this.lineOfSight(enemy, client.player)) return;
       const pellets = Math.max(1, Math.min(weapon.pellets, Number(data.pellets) || 1));
       const falloff = weapon.id === 'shotgun' ? Math.max(0.45, 1 - distance / weapon.range * 0.65) : 1;
-      const damage = weapon.damage * (data.headshot ? 2 : 1) * pellets * falloff;
+      const multiplier = data.hitRegion === 2 ? 2 : data.hitRegion === 0.65 ? 0.65 : 1;
+      const damage = weapon.damage * multiplier * pellets * falloff;
       enemy.health -= damage;
       if (enemy.health <= 0) { enemy.health = 0; enemy.alive = false; client.player.kills++; }
       this.send(client, { type: 'hit', killed: !enemy.alive });
       this.checkStageClear(client);
+    }
+    if (data.type === 'heal' && !this.ended && !client.player.downed && client.medkits > 0 && client.health > 0 && client.health < PERKS[client.perk].maxHealth && Date.now() >= client.nextMedkitAt) {
+      client.medkits--;
+      client.nextMedkitAt = Date.now() + 1200;
+      client.health = Math.min(PERKS[client.perk].maxHealth, client.health + 50);
+      this.send(client, { type: 'equipment', grenades: client.grenades, medkits: client.medkits });
+      this.send(client, { type: 'damaged', health: client.health });
     }
     if (data.type === 'grenade' && !this.ended && !client.player.downed && client.grenades > 0 && Date.now() >= client.nextGrenadeAt) {
       const values = ['x', 'y', 'z', 'vx', 'vy', 'vz'].map((key) => Number(data[key]));
@@ -147,7 +160,8 @@ class Room {
       if (Math.hypot(supply.x - client.player.x, supply.z - client.player.z) > 2) return;
       this.supplies.add(supply.id);
       client.grenades = GRENADE_CAPACITY;
-      this.send(client, { type: 'equipment', grenades: client.grenades });
+      client.medkits = Math.min(3, client.medkits + 1);
+      this.send(client, { type: 'equipment', grenades: client.grenades, medkits: client.medkits });
       if (supply.kind === 'health') {
         client.health = Math.min(PERKS[client.perk].maxHealth, client.health + 50);
         this.send(client, { type: 'damaged', health: client.health });
@@ -372,7 +386,7 @@ const wss = new WebSocketServer({ port });
 const rooms = new Map<string, Room>();
 let nextId = 1;
 wss.on('connection', (ws) => {
-  const client: Client = { ws, room: '', health: 100, weapon: 'rifle', perk: 'runner', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', grenades: GRENADE_CAPACITY, nextGrenadeAt: 0, player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0, health: 100 } };
+  const client: Client = { ws, room: '', health: 100, weapon: 'rifle', perk: 'runner', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', grenades: GRENADE_CAPACITY, nextGrenadeAt: 0, medkits: 2, nextMedkitAt: 0, player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0, health: 100 } };
   ws.on('message', (raw) => {
     try {
       const data = JSON.parse(raw.toString()) as { type: string; room?: string; mode?: string };

@@ -20,18 +20,21 @@
         <div class="build">BUILD 0.1.0 <span class="online-dot"></span> SYSTEM READY</div>
       </header>
       <div class="menu-content">
-        <div class="eyebrow"><span>OPERATION 001</span> / SINGLE PLAYER PROTOTYPE</div>
-        <h1>THE SUNKEN<br /><span>VAULT</span></h1>
-        <p class="brief">Descend. Clear the chamber. Survive.</p>
-        <div class="loadout-bar"><label>MODE<select id="mode-select"><option value="dungeon">DUNGEON OPERATION</option><option value="zombies">ZOMBIE SURVIVAL</option></select></label></div>
+        <div class="eyebrow"><span>DEPLOYMENT TERMINAL</span> / CONFIGURE YOUR OPERATIVE</div>
+        <h1>PREPARE FOR<br /><span>THE VAULT</span></h1>
+        <p class="brief">Choose your operation, operator, and field equipment.</p>
+        <div class="setup-section"><small>01 · OPERATION</small><div class="loadout-bar"><label>MODE<select id="mode-select"><option value="dungeon">DUNGEON OPERATION</option><option value="zombies">ZOMBIE SURVIVAL</option></select></label></div></div>
+        <div class="setup-section"><small>02 · OPERATOR</small><div id="operator-select" class="operator-select"><button class="selected" data-perk="runner"><b>RUNNER</b><span>+15% SPEED</span></button><button data-perk="scavenger"><b>SCAVENGER</b><span>+50% RESERVE</span></button><button data-perk="juggernaut"><b>TANK</b><span>125 HP · DUAL HEAVY</span></button><button data-perk="medic"><b>MEDIC</b><span>FAST REVIVES</span></button></div><select id="perk-select" class="hidden"><option value="runner">RUNNER</option><option value="scavenger">SCAVENGER</option><option value="juggernaut">TANK</option><option value="medic">MEDIC</option></select></div>
+        <div class="setup-section"><small>03 · LOADOUT</small>
         <div class="loadout-bar">
-          <label>PRIMARY<select id="weapon-select"><option value="rifle">M4A1 / RIFLE</option><option value="ak">AK-47 / RIFLE</option><option value="smg">MP5 / SMG</option><option value="pistol">M9 / PISTOL</option><option value="shotgun">M870 / SHOTGUN</option></select></label>
+          <label>1 · PRIMARY<select id="weapon-select"><option value="rifle">M4A1 / RIFLE</option><option value="ak">AK-47 / RIFLE</option><option value="shotgun">M870 / HEAVY</option></select></label>
+          <label>2 · SECONDARY<select id="secondary-select"><option value="smg">MP5 / SMG</option><option value="pistol">M9 / PISTOL</option></select></label>
           <label class="attachment"><input id="optic" type="checkbox" /> RED DOT</label>
           <label class="attachment"><input id="grip" type="checkbox" /> GRIP</label>
           <label class="attachment"><input id="magazine" type="checkbox" /> EXT. MAG</label>
         </div>
-        <div class="loadout-bar"><label>TACTICAL PERK<select id="perk-select"><option value="runner">RUNNER · +15% SPEED</option><option value="scavenger">SCAVENGER · +50% AMMO</option><option value="juggernaut">JUGGERNAUT · 125 HP</option><option value="medic">COMBAT MEDIC · FAST REVIVES</option></select></label></div>
-        <div class="coop-row"><label>CO-OP ROOM <input id="room-code" maxlength="6" placeholder="OPTIONAL CODE" autocomplete="off" /></label><button id="create-room" type="button">CREATE CODE</button></div>
+        </div></div>
+        <div class="coop-row"><label>CO-OP ROOM <input id="room-code" maxlength="6" placeholder="OPTIONAL CODE" autocomplete="off" /></label><button id="create-room" type="button">CREATE CODE</button><button id="welcome-settings" type="button">SETTINGS</button></div>
         <button id="deploy" class="deploy"><span>DEPLOY</span><kbd>ENTER</kbd></button>
         <div class="controls">
           <div><kbd>W A S D</kbd><span>MOVE</span></div>
@@ -55,7 +58,8 @@
     <section id="hud" class="hud hidden">
       <div id="room-status" class="room-status"></div>
       <div id="squad-status" class="squad-status"></div>
-      <div class="equipment"><span>FRAG</span><b id="grenade-count">02</b><kbd>G</kbd></div>
+      <div class="backpack"><div><kbd>1</kbd><span>PRIMARY</span><b id="primary-slot">M4A1</b></div><div><kbd>2</kbd><span>SECONDARY</span><b id="secondary-slot">MP5</b></div><div><kbd>3</kbd><span>HEALTH PACK</span><b id="medkit-count">02</b></div><div><kbd>4</kbd><span>FRAG</span><b id="grenade-count">02</b></div></div>
+      <div id="scope-overlay" class="scope-overlay hidden"><div class="scope-ring"><i></i><b></b></div></div>
       <div id="boss" class="boss hidden"><small>THE WARDEN</small><div><i id="boss-health"></i></div></div>
       <div class="hud-top">
         <div class="mission"><small>VAULT 07 / SUBLEVEL 3</small><strong>CLEAR THE CHAMBER</strong></div>
@@ -70,15 +74,16 @@
         <div id="message" class="combat-message"></div>
         <div class="ammo"><small><i id="weapon-name">M4A1</i> <span id="weapon-mode">AUTO</span></small><div><span id="ammo">30</span><b>/ 120</b></div><div id="reload-label" class="reload-label"></div></div>
       </div>
-      <div class="hud-help">[R] RELOAD <span>·</span> [SPACE] JUMP <span>·</span> [C] CROUCH / SLIDE <span>·</span> [ESC] PAUSE</div>
+      <div class="hud-help">[1/2] WEAPONS <span>·</span> [3] HEAL <span>·</span> [4] FRAG <span>·</span> [R] RELOAD <span>·</span> [SPACE] JUMP <span>·</span> [C] CROUCH / SLIDE <span>·</span> [ESC] PAUSE</div>
     </section>
 
     <section id="pause" class="overlay hidden">
-      <div class="result-card"><div class="eyebrow">OPERATION PAUSED</div><h2>TAKE A BREATH.</h2><p>The vault will wait.</p><button id="resume" class="deploy">RESUME</button><button id="restart-pause" class="text-button">RESTART OPERATION</button></div>
+      <div class="result-card"><div class="eyebrow">OPERATION PAUSED</div><h2>TAKE A BREATH.</h2><p>The vault will wait.</p><button id="resume" class="deploy">RESUME</button><button id="pause-settings" class="text-button">SETTINGS</button><button id="restart-pause" class="text-button">RESTART OPERATION</button><button id="main-menu" class="text-button">QUIT TO MAIN MENU</button></div>
     </section>
     <section id="result" class="overlay hidden">
-      <div class="result-card"><div id="result-label" class="eyebrow"></div><h2 id="result-title"></h2><p id="result-copy"></p><div class="result-stats"><div><span id="stat-kills">0</span><small>ELIMINATIONS</small></div><div><span id="stat-shots">0</span><small>SHOTS FIRED</small></div><div><span id="stat-time">0:00</span><small>TIME</small></div></div><button id="restart" class="deploy">RUN IT AGAIN</button></div>
+      <div class="result-card"><div id="result-label" class="eyebrow"></div><h2 id="result-title"></h2><p id="result-copy"></p><div class="result-stats"><div><span id="stat-kills">0</span><small>ELIMINATIONS</small></div><div><span id="stat-shots">0</span><small>SHOTS FIRED</small></div><div><span id="stat-time">0:00</span><small>TIME</small></div></div><button id="restart" class="deploy">RUN IT AGAIN</button><button id="result-menu" class="text-button">MAIN MENU</button></div>
     </section>
+    <section id="settings" class="overlay hidden"><div class="result-card settings-card"><div class="eyebrow">SYSTEM CONFIGURATION</div><h2>SETTINGS</h2><label>MASTER VOLUME <output id="volume-value">70%</output><input id="volume" type="range" min="0" max="100" value="70" /></label><label>FIELD OF VIEW <output id="fov-value">90</output><input id="fov" type="range" min="70" max="110" value="90" /></label><label>MOUSE SENSITIVITY <output id="sensitivity-value">1.0</output><input id="sensitivity" type="range" min="30" max="250" value="100" /></label><label class="setting-check"><input id="reduced-motion" type="checkbox" /> REDUCE CAMERA MOTION</label><button id="fullscreen">TOGGLE FULLSCREEN</button><div class="settings-controls"><b>CONTROLS</b><span>WASD MOVE · RMB AIM · LMB FIRE</span><span>1 PRIMARY · 2 SECONDARY · 3 HEAL · 4 FRAG</span><span>R RELOAD · C CROUCH · SHIFT+C SLIDE</span><span>ESC PAUSE · E REVIVE</span></div><button id="close-settings" class="deploy">BACK</button></div></section>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

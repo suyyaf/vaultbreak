@@ -1,8 +1,8 @@
 import {
   Color3, Color4, DirectionalLight, Engine, GlowLayer, HemisphericLight,
-  Mesh, MeshBuilder, Ray, Scene, StandardMaterial, TransformNode, UniversalCamera, Vector3,
+  Mesh, MeshBuilder, Ray, Scene, StandardMaterial, TransformNode, UniversalCamera, Vector3
 } from '@babylonjs/core';
-import { getWeapon, Loadout, WeaponId, WeaponSpec } from './weapons';
+import { getWeapon, Loadout, WeaponId, WeaponSpec, WEAPONS } from './weapons';
 import { ServerMessage, WorldState } from './network';
 import { ENEMY_SPAWNS, GATE_Z, STAGE_NAMES, SUPPLIES } from './dungeon';
 import { GameMode, ZombieKind, ZOMBIE_SPAWNS, zombieDamage, zombieHealth, zombieKind, zombieSpeed, zombieWaveSize } from './modes';
@@ -32,6 +32,9 @@ export interface GameEvents {
   onWave: (wave: number) => void;
   onSpread: (spread: number) => void;
   onGrenades: (count: number) => void;
+  onMedkits: (count: number) => void;
+  onSlots: (primary: string, secondary: string) => void;
+  onScope: (active: boolean) => void;
 }
 
 interface Enemy {
@@ -56,6 +59,7 @@ export class Game {
   private readonly camera: UniversalCamera;
   private readonly keys = new Set<string>();
   private readonly enemies: Enemy[] = [];
+  private readonly shotRegions = new Map<number, number>();
   private readonly obstacles: Mesh[] = [];
   private readonly gun: TransformNode;
   private muzzle!: Mesh;
@@ -117,9 +121,21 @@ export class Game {
   private perk: PerkId = 'runner';
   private pumpMesh?: TransformNode;
   private readonly teammateTargets = new Map<string, { position: Vector3; yaw: number }>();
+  private readonly operatorModels = new Map<PerkId, TransformNode>();
   private readonly acidProjectiles = new Map<number, AcidProjectile>();
   private readonly acidMeshes = new Map<number, Mesh>();
   private nextAcidId = 1;
+  private primaryId: WeaponId = 'rifle';
+  private secondaryId: WeaponId = 'smg';
+  private activeSlot: 1 | 2 = 1;
+  private weaponAmmo = new Map<WeaponId, { ammo: number; reserve: number }>();
+  private medkits = 2;
+  private nextMedkitAt = 0;
+  private mouseSensitivity = 0.0018;
+  private baseFov = 1.25;
+  private reducedMotion = false;
+  private masterVolume = 0.7;
+  private masterGain?: GainNode;
 
   constructor(private readonly engine: Engine, private readonly events: GameEvents) {
     this.scene = new Scene(engine);
@@ -146,6 +162,7 @@ export class Game {
     this.spawnEnemies();
     this.spawnZombies();
     this.buildGateMarker();
+    this.buildOperatorPreview();
     this.bindInput();
     this.scene.onBeforeRenderObservable.add(() => this.update());
   }
@@ -154,15 +171,48 @@ export class Game {
 
   setMode(mode: GameMode) { this.mode = mode; }
 
-  setPerk(perk: PerkId) { this.perk = PERKS[perk] ? perk : 'runner'; }
+  setPerk(perk: PerkId) {
+    this.perk = PERKS[perk] ? perk : 'runner';
+    for (const [id, model] of this.operatorModels) {
+      const selected = id === this.perk;
+      model.scaling.setAll(selected ? 1.12 : 1);
+      (model.getChildMeshes().find((mesh) => mesh.name === 'operator platform')?.material as StandardMaterial).emissiveColor = selected ? new Color3(0.35, 0.5, 0.1) : new Color3(0.01, 0.015, 0.01);
+    }
+  }
+
+  setSecondary(weapon: WeaponId) {
+    this.secondaryId = this.perk === 'juggernaut' && (weapon === 'ak' || weapon === 'shotgun') ? weapon : weapon === 'pistol' ? 'pistol' : 'smg';
+  }
+
+  setSensitivity(value: number) { this.mouseSensitivity = Math.max(0.0005, Math.min(0.005, value)); }
+  setFieldOfView(value: number) { this.baseFov = Math.max(0.9, Math.min(1.6, value)); }
+  setReducedMotion(value: boolean) { this.reducedMotion = value; }
+  setVolume(value: number) {
+    this.masterVolume = Math.max(0, Math.min(1, value));
+    if (this.masterGain && this.audio) this.masterGain.gain.value = this.masterVolume;
+  }
+
+  mainMenu() {
+    this.disconnect();
+    this.state = 'menu';
+    this.firing = false;
+    this.aiming = false;
+    this.keys.clear();
+    this.events.onScope(false);
+    this.gun.setEnabled(false);
+    for (const model of this.operatorModels.values()) model.setEnabled(true);
+  }
 
   setLoadout(weapon: WeaponId, loadout: Loadout) {
+    this.primaryId = weapon;
+    this.activeSlot = 1;
     this.loadout = { ...loadout };
     this.weapon = getWeapon(weapon, loadout);
     for (const mesh of this.gunParts) { mesh.material?.dispose(); mesh.dispose(); }
     this.gunParts = [];
     this.buildGun();
     this.events.onWeapon(this.weapon);
+    this.events.onSlots(WEAPONS[this.primaryId].name, WEAPONS[this.secondaryId].name);
   }
 
   async connectCoop(room: string) {
@@ -205,6 +255,7 @@ export class Game {
       } else if (message.type === 'equipment') {
         this.grenades = message.grenades;
         this.events.onGrenades(this.grenades);
+        if (message.medkits !== undefined) { this.medkits = message.medkits; this.events.onMedkits(this.medkits); }
       } else if (message.type === 'explosion') this.explode(new Vector3(message.x, message.y, message.z));
       else if (message.type === 'notice') this.events.onMessage(message.message);
       else if (message.type === 'error') this.events.onMessage(message.message);
@@ -332,6 +383,7 @@ export class Game {
   start() {
     this.reset();
     this.state = 'playing';
+    for (const model of this.operatorModels.values()) model.setEnabled(false);
     this.pointerLocked = false;
     this.startedAt = performance.now();
     const me = this.lastWorld?.players.find((player) => player.id === this.playerId);
@@ -340,8 +392,13 @@ export class Game {
     this.verticalVelocity = 0;
     this.camera.rotation.set(0, 0, 0);
     this.lockPointer();
-    this.audio ??= new AudioContext();
-    this.combatAudio ??= new CombatAudio(this.audio);
+    if (!this.audio) {
+      this.audio = new AudioContext();
+      this.masterGain = this.audio.createGain();
+      this.masterGain.gain.value = this.masterVolume;
+      this.masterGain.connect(this.audio.destination);
+    }
+    this.combatAudio ??= new CombatAudio(this.audio, this.masterGain);
     void this.audio.resume();
   }
 
@@ -363,6 +420,16 @@ export class Game {
       this.events.onBoss(0, 800);
     }
     this.health = PERKS[this.perk].maxHealth;
+    this.medkits = 2;
+    this.events.onMedkits(this.medkits);
+    this.weaponAmmo.clear();
+    this.activeSlot = 1;
+    if (this.weapon.id !== this.primaryId) {
+      this.weapon = getWeapon(this.primaryId, this.loadout);
+      for (const mesh of this.gunParts) { mesh.material?.dispose(); mesh.dispose(); }
+      this.gunParts = [];
+      this.buildGun();
+    }
     this.ammo = this.weapon.magazine;
     this.reserve = Math.round(this.weapon.reserve * PERKS[this.perk].ammo);
     this.grenades = GRENADE_CAPACITY;
@@ -378,6 +445,7 @@ export class Game {
     this.shots = 0;
     this.firing = false;
     this.aiming = false;
+    this.events.onScope(false);
     this.reloadAt = 0;
     this.sliding = false;
     this.crouched = false;
@@ -428,6 +496,8 @@ export class Game {
 
   private pause() {
     this.state = 'paused';
+    this.aiming = false;
+    this.events.onScope(false);
     this.firing = false;
     this.keys.clear();
     this.events.onPause();
@@ -439,7 +509,10 @@ export class Game {
       this.keys.add(event.code);
       if (event.repeat) return;
       if (event.code === 'KeyR' && this.state === 'playing') this.reload();
-      if (event.code === 'KeyG' && this.state === 'playing' && !this.downed) this.throwGrenade();
+      if ((event.code === 'KeyG' || event.code === 'Digit4') && this.state === 'playing' && !this.downed) this.throwGrenade();
+      if (event.code === 'Digit3' && this.state === 'playing' && !this.downed) this.useMedkit();
+      if (event.code === 'Digit1' && this.state === 'playing' && !this.downed) this.switchWeapon(1);
+      if (event.code === 'Digit2' && this.state === 'playing' && !this.downed) this.switchWeapon(2);
       if (event.code === 'Space' && this.state === 'playing') {
         event.preventDefault();
         this.jump();
@@ -451,17 +524,17 @@ export class Game {
     canvas.addEventListener('mousedown', (event) => {
       if (this.state !== 'playing') return;
       if (event.button === 0) this.firing = true;
-      if (event.button === 2) this.aiming = true;
+      if (event.button === 2) { this.aiming = true; this.events.onScope(this.loadout.optic); }
     });
     window.addEventListener('mouseup', (event) => {
       if (event.button === 0) { this.firing = false; this.triggerReady = true; }
-      if (event.button === 2) this.aiming = false;
+      if (event.button === 2) { this.aiming = false; this.events.onScope(false); }
     });
     canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     document.addEventListener('mousemove', (event) => {
       if (this.state !== 'playing' || document.pointerLockElement !== canvas) return;
-      this.camera.rotation.y += event.movementX * 0.0018;
-      this.camera.rotation.x += event.movementY * 0.0018;
+      this.camera.rotation.y += event.movementX * this.mouseSensitivity;
+      this.camera.rotation.x += event.movementY * this.mouseSensitivity;
       this.camera.rotation.x = Math.max(-1.35, Math.min(1.35, this.camera.rotation.x));
     });
     document.addEventListener('pointerlockchange', () => {
@@ -597,6 +670,45 @@ export class Game {
       }
       this.supplyMeshes.set(supply.id, root);
     }
+  }
+
+  private buildOperatorPreview() {
+    const ids: PerkId[] = ['runner', 'scavenger', 'juggernaut', 'medic'];
+    const colors = [new Color3(0.35, 0.45, 0.26), new Color3(0.43, 0.3, 0.16), new Color3(0.2, 0.25, 0.28), new Color3(0.24, 0.42, 0.43)];
+    ids.forEach((id, index) => {
+      const root = new TransformNode(`operator preview ${id}`, this.scene);
+      root.position.set(3.2 + index * 2.1, 0.15, 3);
+      root.metadata = { previewLight: new HemisphericLight('operator fill', new Vector3(0, 1, 0.4), this.scene) };
+      root.metadata.previewLight.intensity = 1.4;
+      const armor = this.material(colors[index], 0.28);
+      const dark = this.material(new Color3(0.08, 0.1, 0.09));
+      const accent = this.material(new Color3(0.75, 0.9, 0.4), 0.8);
+      const part = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, material = armor) => {
+        const mesh = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, this.scene);
+        mesh.parent = root; mesh.position.set(x, y, z); mesh.material = material; mesh.isPickable = false;
+        return mesh;
+      };
+      const bulk = id === 'juggernaut' ? 1.25 : id === 'runner' ? 0.88 : 1;
+      part('operator torso', 0.72 * bulk, 0.82, 0.4, 0, 1.35, 0);
+      part('operator head', 0.4, 0.4, 0.4, 0, 2, 0, dark);
+      part('operator visor', 0.3, 0.07, 0.025, 0, 2.02, 0.21, accent);
+      for (const x of [-0.2 * bulk, 0.2 * bulk]) {
+        part('operator leg', 0.25, 0.85, 0.28, x, 0.47, 0, dark);
+        part('operator arm', 0.21 * bulk, 0.78, 0.25, x * 2.6, 1.35, 0);
+      }
+      part('operator chest', 0.55 * bulk, 0.28, 0.08, 0, 1.5, 0.24, dark);
+      if (id === 'juggernaut') for (const x of [-0.58, 0.58]) part('tank shoulder', 0.38, 0.35, 0.48, x, 1.62, 0, dark);
+      if (id === 'scavenger') part('scavenger pack', 0.65, 0.85, 0.34, 0, 1.25, -0.32, dark);
+      if (id === 'medic') {
+        part('medic cross', 0.32, 0.1, 0.03, 0, 1.48, 0.3, accent);
+        part('medic cross', 0.1, 0.32, 0.03, 0, 1.48, 0.3, accent);
+      }
+      if (id === 'runner') part('runner hood', 0.48, 0.18, 0.46, 0, 2.19, -0.02, armor);
+      part('operator rifle', 0.12, 0.13, 1, 0.33, 1.35, 0.25, dark).rotation.x = -0.35;
+      const platform = MeshBuilder.CreateCylinder('operator platform', { diameter: 1.65, height: 0.12, tessellation: 6 }, this.scene);
+      platform.parent = root; platform.position.y = -0.1; platform.material = this.material(new Color3(0.12, 0.15, 0.12)); platform.isPickable = false;
+      this.operatorModels.set(id, root);
+    });
   }
 
   private buildGateMarker() {
@@ -753,13 +865,14 @@ export class Game {
   private update() {
     const dt = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
     if (this.state === 'menu') {
-      this.camera.position.set(Math.sin(performance.now() * 0.00008) * 2, 2.5, 18);
-      this.camera.setTarget(new Vector3(0, 1.4, -9));
+      this.camera.position.set(6.2, 2.5, 13);
+      this.camera.setTarget(new Vector3(6.2, 1.35, 3));
+      for (const model of this.operatorModels.values()) model.rotation.y = Math.sin(performance.now() * 0.0005) * 0.12;
       this.gun.setEnabled(false);
       return;
     }
     if (this.state !== 'playing') return;
-    this.gun.setEnabled(true);
+    this.gun.setEnabled(!(this.aiming && this.loadout.optic));
     this.updatePlayer(dt);
     this.updateSupplies();
     this.interpolateNetwork(dt);
@@ -867,9 +980,10 @@ export class Game {
       this.verticalVelocity = 0;
       this.camera.cameraDirection.y = 0;
     }
-    const targetFov = this.aiming ? 0.85 : 1.25;
+    const targetFov = this.aiming ? (this.loadout.optic ? this.baseFov * 0.44 : this.baseFov * 0.68) : this.baseFov;
+    this.events.onScope(this.aiming && this.loadout.optic);
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 12);
-    const bob = moving ? Math.sin(this.walkTime) * 0.008 : 0;
+    const bob = moving && !this.reducedMotion ? Math.sin(this.walkTime) * 0.008 : 0;
     const reloading = this.reloadAt > 0;
     const targetX = reloading ? 0.12 : this.aiming ? 0 : 0.34;
     const targetY = (reloading ? -0.48 : this.aiming ? (this.loadout.optic ? -0.215 : -0.09) : -0.3) + bob;
@@ -957,6 +1071,7 @@ export class Game {
     const right = Vector3.Cross(UP, forward).normalize();
     const up = Vector3.Cross(forward, right).normalize();
     const spread = this.weapon.spread * (this.aiming ? 0.4 : 1);
+    this.shotRegions.clear();
     const hits = new Map<number, { enemy: Enemy; pellets: number; headshot: boolean }>();
     for (let pellet = 0; pellet < this.weapon.pellets; pellet++) {
       const direction = forward.add(right.scale((Math.random() - 0.5) * spread)).add(up.scale((Math.random() - 0.5) * spread)).normalize();
@@ -969,14 +1084,16 @@ export class Game {
         if (enemy.alive && enemy.root.isEnabled()) {
           const previous = hits.get(metadata.enemyIndex);
           hits.set(metadata.enemyIndex, { enemy, pellets: (previous?.pellets ?? 0) + 1, headshot: previous?.headshot || metadata.multiplier === 2 });
+          this.shotRegions.set(metadata.enemyIndex, this.hitRegion(enemy, hit.pickedPoint));
         }
       }
       if (pellet < 3 || this.weapon.pellets === 1) this.impact(hit.pickedPoint);
     }
     for (const hit of hits.values()) {
       const falloff = this.weapon.id === 'shotgun' ? Math.max(0.45, 1 - this.camera.position.subtract(hit.enemy.root.position).length() / this.weapon.range * 0.65) : 1;
-      if (this.isCoop) this.sendNetwork({ type: 'shoot', enemyId: hit.enemy.id, headshot: hit.headshot, pellets: hit.pellets });
-      else this.damageEnemy(hit.enemy, this.weapon.damage * hit.pellets * (hit.headshot ? 2 : 1) * falloff);
+      const multiplier = this.shotRegions.get(hit.enemy.id) ?? 1;
+      if (this.isCoop) this.sendNetwork({ type: 'shoot', enemyId: hit.enemy.id, hitRegion: multiplier, pellets: hit.pellets });
+      else this.damageEnemy(hit.enemy, this.weapon.damage * hit.pellets * multiplier * falloff);
     }
   }
 
@@ -987,6 +1104,40 @@ export class Game {
     mesh.checkCollisions = false;
     this.grenadeMeshes.set(key, mesh);
     return mesh;
+  }
+
+  private useMedkit() {
+    const maxHealth = PERKS[this.perk].maxHealth;
+    if (this.medkits <= 0 || this.health >= maxHealth || performance.now() < this.nextMedkitAt) return;
+    this.medkits--;
+    this.nextMedkitAt = performance.now() + 1200;
+    this.health = Math.min(maxHealth, this.health + 50);
+    this.events.onHealth(this.health);
+    this.events.onMedkits(this.medkits);
+    this.combatAudio?.pickup();
+    this.events.onMessage('+50 HEALTH');
+    if (this.isCoop) this.sendNetwork({ type: 'heal' });
+  }
+
+  private switchWeapon(slot: 1 | 2) {
+    if (this.activeSlot === slot) return;
+    this.weaponAmmo.set(this.weapon.id, { ammo: this.ammo, reserve: this.reserve });
+    this.activeSlot = slot;
+    this.reloadAt = 0;
+    this.firing = false;
+    this.aiming = false;
+    this.events.onReload(false);
+    this.events.onScope(false);
+    this.weapon = getWeapon(slot === 1 ? this.primaryId : this.secondaryId, this.loadout);
+    const saved = this.weaponAmmo.get(this.weapon.id);
+    this.ammo = saved?.ammo ?? this.weapon.magazine;
+    this.reserve = saved?.reserve ?? Math.round(this.weapon.reserve * PERKS[this.perk].ammo);
+    for (const mesh of this.gunParts) { mesh.material?.dispose(); mesh.dispose(); }
+    this.gunParts = [];
+    this.buildGun();
+    this.events.onWeapon(this.weapon);
+    this.events.onAmmo(this.ammo, this.reserve);
+    this.sendNetwork({ type: 'loadout', weapon: this.weapon.id, loadout: this.loadout, perk: this.perk });
   }
 
   private throwGrenade() {
@@ -1134,7 +1285,9 @@ export class Game {
       if (this.isCoop) this.sendNetwork({ type: 'supply', supplyId: supply.id });
       else {
         this.grenades = GRENADE_CAPACITY;
+        this.medkits = Math.min(3, this.medkits + 1);
         this.events.onGrenades(this.grenades);
+        this.events.onMedkits(this.medkits);
       }
       if (supply.kind === 'health') {
         this.health = Math.min(PERKS[this.perk].maxHealth, this.health + 50);
@@ -1263,6 +1416,11 @@ export class Game {
     const ray = new Ray(start, direction);
     const hit = this.scene.pickWithRay(ray, (mesh) => this.obstacles.some((obstacle) => obstacle === mesh) && mesh.isEnabled());
     return !hit?.hit || hit.distance >= distance;
+  }
+
+  private hitRegion(enemy: Enemy, point: Vector3) {
+    const local = Vector3.TransformCoordinates(point, enemy.root.getWorldMatrix().invert());
+    return local.y > 1.7 ? 2 : local.y < 0.95 || Math.abs(local.x) > 0.38 ? 0.65 : 1;
   }
 
   private takeDamage(amount: number) {

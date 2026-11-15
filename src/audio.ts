@@ -3,7 +3,7 @@ import { WeaponId } from './weapons';
 export class CombatAudio {
   private noise?: AudioBuffer;
 
-  constructor(private readonly context: AudioContext) {}
+  constructor(private readonly context: AudioContext, private readonly output: AudioNode = context.destination) {}
 
   weapon(id: WeaponId) {
     const now = this.context.currentTime;
@@ -50,7 +50,7 @@ export class CombatAudio {
     oscillator.frequency.exponentialRampToValueAtTime(to, start + duration);
     gain.gain.setValueAtTime(volume, start);
     gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
-    oscillator.connect(gain).connect(this.context.destination);
+    oscillator.connect(gain).connect(this.output);
     oscillator.start(start);
     oscillator.stop(start + duration);
   }
@@ -69,7 +69,7 @@ export class CombatAudio {
     filter.frequency.value = frequency;
     gain.gain.setValueAtTime(volume, start);
     gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
-    source.connect(filter).connect(gain).connect(this.context.destination);
+    source.connect(filter).connect(gain).connect(this.output);
     source.start(start);
     source.stop(start + duration);
   }

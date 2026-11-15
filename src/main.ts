@@ -11,6 +11,24 @@ let messageTimer: ReturnType<typeof setTimeout>;
 let hitTimer: ReturnType<typeof setTimeout>;
 let damageTimer: ReturnType<typeof setTimeout>;
 
+const saved = JSON.parse(localStorage.getItem('vaultbreak-settings') ?? '{}') as { volume?: number; fov?: number; sensitivity?: number; reducedMotion?: boolean };
+const settings = { volume: saved.volume ?? 70, fov: saved.fov ?? 90, sensitivity: saved.sensitivity ?? 100, reducedMotion: saved.reducedMotion ?? false };
+byId<HTMLInputElement>('volume').value = String(settings.volume);
+byId<HTMLInputElement>('fov').value = String(settings.fov);
+byId<HTMLInputElement>('sensitivity').value = String(settings.sensitivity);
+byId<HTMLInputElement>('reduced-motion').checked = settings.reducedMotion;
+function saveSettings() { localStorage.setItem('vaultbreak-settings', JSON.stringify(settings)); }
+let applySettings = () => {};
+applySettings = () => {
+  game.setVolume(settings.volume / 100);
+  game.setFieldOfView(2 * Math.atan(Math.tan(settings.fov * Math.PI / 360) / (16 / 9)));
+  game.setSensitivity(0.0018 * settings.sensitivity / 100);
+  game.setReducedMotion(settings.reducedMotion);
+  byId('volume-value').textContent = `${settings.volume}%`;
+  byId('fov-value').textContent = String(settings.fov);
+  byId('sensitivity-value').textContent = (settings.sensitivity / 100).toFixed(1);
+  saveSettings();
+};
 const game = new Game(engine, {
   onAmmo: (ammo, reserve) => {
     byId('ammo').textContent = String(ammo).padStart(2, '0');
@@ -76,6 +94,12 @@ const game = new Game(engine, {
   },
   onSpread: (spread) => { byId('crosshair').style.setProperty('--spread', `${spread}px`); },
   onGrenades: (count) => { byId('grenade-count').textContent = String(count).padStart(2, '0'); },
+  onMedkits: (count) => { byId('medkit-count').textContent = String(count).padStart(2, '0'); },
+  onSlots: (primary, secondary) => { byId('primary-slot').textContent = primary; byId('secondary-slot').textContent = secondary; },
+  onScope: (active) => {
+    byId('scope-overlay').classList.toggle('hidden', !active);
+    byId('crosshair').classList.toggle('hidden', active);
+  },
   onPause: () => {
     if (game.currentState !== 'paused') return;
     byId('pause').classList.remove('hidden');
@@ -96,6 +120,7 @@ const game = new Game(engine, {
 function deploy() {
   game.setMode(byId<HTMLSelectElement>('mode-select').value as 'dungeon' | 'zombies');
   game.setPerk(byId<HTMLSelectElement>('perk-select').value as PerkId);
+  game.setSecondary(byId<HTMLSelectElement>('secondary-select').value as WeaponId);
   game.setLoadout(byId<HTMLSelectElement>('weapon-select').value as WeaponId, {
     optic: byId<HTMLInputElement>('optic').checked,
     grip: byId<HTMLInputElement>('grip').checked,
@@ -111,10 +136,34 @@ function deploy() {
   game.start();
 }
 
+byId('operator-select').addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-perk]');
+  if (!button) return;
+  const perk = button.dataset.perk as PerkId;
+  byId<HTMLSelectElement>('perk-select').value = perk;
+  document.querySelectorAll('#operator-select button').forEach((entry) => entry.classList.toggle('selected', entry === button));
+  game.setPerk(perk);
+  const secondary = byId<HTMLSelectElement>('secondary-select');
+  const selectedWeapon = secondary.value;
+  secondary.replaceChildren(new Option('MP5 / SMG', 'smg'), new Option('M9 / PISTOL', 'pistol'));
+  if (perk === 'juggernaut') {
+    secondary.add(new Option('AK-47 / HEAVY RIFLE', 'ak'));
+    secondary.add(new Option('M870 / HEAVY', 'shotgun'));
+  }
+  if ([...secondary.options].some((option) => option.value === selectedWeapon)) secondary.value = selectedWeapon;
+});
+for (const id of ['volume', 'fov', 'sensitivity'] as const) byId<HTMLInputElement>(id).addEventListener('input', () => {
+  settings[id] = Number(byId<HTMLInputElement>(id).value);
+  applySettings();
+});
+byId<HTMLInputElement>('reduced-motion').addEventListener('change', () => { settings.reducedMotion = byId<HTMLInputElement>('reduced-motion').checked; applySettings(); });
+byId('fullscreen').addEventListener('click', () => { if (document.fullscreenElement) void document.exitFullscreen(); else void document.documentElement.requestFullscreen(); });
+for (const id of ['welcome-settings', 'pause-settings']) byId(id).addEventListener('click', () => byId('settings').classList.remove('hidden'));
+byId('close-settings').addEventListener('click', () => byId('settings').classList.add('hidden'));
 byId('mode-select').addEventListener('change', () => {
   const zombies = byId<HTMLSelectElement>('mode-select').value === 'zombies';
   document.querySelector('.eyebrow span')!.textContent = zombies ? 'SURVIVAL PROTOCOL' : 'OPERATION 001';
-  document.querySelector('h1')!.innerHTML = zombies ? 'ZOMBIE<br /><span>SURVIVAL</span>' : 'THE SUNKEN<br /><span>VAULT</span>';
+  document.querySelector('.setup-section small')!.textContent = zombies ? '01 · ZOMBIE SURVIVAL' : '01 · DUNGEON OPERATION';
   document.querySelector('.brief')!.textContent = zombies ? 'Hold the vault. Resupply. Survive the outbreak.' : 'Descend. Clear the chamber. Survive.';
   document.querySelector('.weapon-preview strong')!.textContent = zombies ? 'ENDLESS WAVES' : 'M4A1';
 });
@@ -129,12 +178,26 @@ byId('create-room').addEventListener('click', () => {
 byId('deploy').addEventListener('click', deploy);
 byId('restart').addEventListener('click', deploy);
 byId('restart-pause').addEventListener('click', deploy);
+function mainMenu() {
+  game.mainMenu();
+  byId('pause').classList.add('hidden');
+  byId('result').classList.add('hidden');
+  byId('hud').classList.add('hidden');
+  byId('menu').classList.remove('hidden');
+}
+byId('main-menu').addEventListener('click', mainMenu);
+byId('result-menu').addEventListener('click', mainMenu);
 byId('resume').addEventListener('click', () => {
   byId('pause').classList.add('hidden');
   game.resume();
 });
 window.addEventListener('keydown', (event) => {
   if (event.code === 'Enter' && game.currentState === 'menu') deploy();
+  if (event.code === 'Escape' && game.currentState === 'paused') {
+    byId('pause').classList.add('hidden');
+    game.resume();
+  }
 });
 window.addEventListener('resize', () => engine.resize());
+applySettings();
 engine.runRenderLoop(() => game.scene.render());

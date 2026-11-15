@@ -18,10 +18,12 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 - **WASD:** move
 - **Mouse:** aim
 - **Left click:** fire
-- **Right click:** aim down sights
+- **Right click:** aim down sights; red-dot-equipped weapons use a circular optical scope
 - **Shift:** sprint
 - **R:** reload with animated magazine swap
-- **G:** throw a frag grenade (two carried; area damage, falloff, and cover bounces)
+- **1 / 2:** switch primary and secondary weapons; each retains its own ammunition
+- **3:** use a health pack (+50 HP, two carried)
+- **4 / G:** throw a frag grenade (two carried; area damage, falloff, and cover bounces)
 - **Space:** jump
 - **C / Left Ctrl:** toggle crouch; while holding Shift, slide
 - **Hold E near a downed teammate:** revive (3 seconds)
@@ -39,6 +41,10 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 3. **Next — balance and content:** weapon feel, enemy pacing, wave difficulty, UI, and performance based on complete solo/co-op playtests, followed by unlocks and new objectives.
 4. **Later — expansion:** more weapons, maps, and objectives.
 
+## Deployment and settings
+
+The welcome screen provides operation selection, four visible 3D operators, primary/secondary weapons, and attachments. **Tank** has 125 HP and can carry an AK-47 or M870 as a heavy secondary. Settings are available from both the welcome and Esc pause screens: master volume, field of view, mouse sensitivity, reduced camera motion, and fullscreen. Settings persist locally.
+
 ## Arsenal and perks
 
 - **M4A1:** automatic rifle, 30 rounds, controllable recoil.
@@ -50,6 +56,8 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 - **Scavenger:** +50% reserve ammunition.
 - **Juggernaut:** 125 maximum health with a slight speed penalty.
 - **Combat Medic:** revive teammates in 1.5 seconds instead of 3, restoring 75 HP instead of 50.
+
+Shots scale by hit region: **2× head, 1× torso, and 0.65× arms/legs**, using the actual impact point and enemy scale. Co-op validates and applies the same multipliers. Health packs and their resupply are server-authoritative in co-op.
 
 Co-op includes a squad HUD with each player's health, downed state, and individual eliminations. Grenades are server-authoritative in co-op, including damage and elimination credit; collecting ammunition resupplies both carried grenades.
 
