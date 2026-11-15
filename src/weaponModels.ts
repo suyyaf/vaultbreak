@@ -67,6 +67,23 @@ export function buildWeaponModel(scene: Scene, gun: TransformNode, weapon: Weapo
     box('M4 magazine floorplate', 0.135, 0.035, 0.2, 0, -0.145, 0, metal, magazine as unknown as TransformNode);
     box('M4 charging handle', 0.21, 0.035, 0.05, 0, 0.075, 0.27, dark);
     box('M4 front sight', 0.07, 0.105, 0.04, 0, 0.17, -0.77, dark);
+  } else if (weapon.id === 'smg') {
+    box('MP5 receiver', 0.17, 0.18, 0.58, 0, 0, -0.02, metal);
+    box('MP5 stamped top', 0.15, 0.04, 0.62, 0, 0.105, -0.03, dark);
+    cylinder('MP5 barrel shroud', 0.12, 0.34, 0, 0.015, -0.47, dark);
+    cylinder('MP5 barrel', 0.042, 0.28, 0, 0.015, -0.73);
+    cylinder('MP5 muzzle', 0.065, 0.08, 0, 0.015, -0.9, dark);
+    box('MP5 hand stop', 0.08, 0.15, 0.11, 0, -0.105, -0.46, gripMat).rotation.x = -0.2;
+    box('MP5 pistol grip', 0.115, 0.26, 0.14, 0, -0.225, 0.17, gripMat).rotation.x = -0.3;
+    magazine = box('MP5 curved magazine', 0.105, 0.33, 0.15, 0, -0.25, -0.09, dark);
+    magazine.rotation.x = -0.24;
+    box('MP5 magazine ribs', 0.112, 0.21, 0.03, 0, -0.035, 0.08, metal, magazine as unknown as TransformNode);
+    box('MP5 stock rail', 0.07, 0.07, 0.43, 0, 0.025, 0.48, metal);
+    box('MP5 compact stock', 0.14, 0.19, 0.27, 0, -0.02, 0.7, polymer);
+    box('MP5 rear sight drum', 0.15, 0.12, 0.09, 0, 0.17, 0.19, dark);
+    box('MP5 front sight', 0.13, 0.15, 0.04, 0, 0.13, -0.68, dark);
+    box('MP5 charging handle', 0.19, 0.045, 0.05, -0.05, 0.075, -0.36, dark).rotation.z = 0.25;
+    muzzleZ = -0.98;
   } else if (weapon.id === 'pistol') {
     box('M9 slide', 0.145, 0.145, 0.64, 0, 0.045, -0.16, metal);
     box('M9 frame', 0.13, 0.115, 0.55, 0, -0.06, -0.1, dark);
@@ -103,6 +120,7 @@ export function buildWeaponModel(scene: Scene, gun: TransformNode, weapon: Weapo
     box('red dot lens', 0.095, 0.095, 0.008, 0, y, z - 0.09, glow);
   }
   if (loadout.grip && weapon.id === 'rifle') box('vertical foregrip', 0.095, 0.25, 0.105, 0, -0.16, -0.5, gripMat).rotation.x = -0.12;
+  if (loadout.grip && weapon.id === 'smg') box('MP5 foregrip', 0.1, 0.19, 0.1, 0, -0.14, -0.45, gripMat).rotation.x = -0.12;
   if (loadout.magazine && magazine) magazine.scaling.y = 1.3;
   const muzzle = MeshBuilder.CreateCylinder('muzzle flash', { diameterTop: 0, diameterBottom: 0.19, height: 0.28, tessellation: 6 }, scene);
   muzzle.rotation.x = -Math.PI / 2;

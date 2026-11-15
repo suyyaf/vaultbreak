@@ -9,8 +9,9 @@ export class CombatAudio {
     const now = this.context.currentTime;
     const shotgun = id === 'shotgun';
     const pistol = id === 'pistol';
-    this.noiseBurst(now, shotgun ? 0.22 : pistol ? 0.09 : 0.075, shotgun ? 0.34 : 0.2, shotgun ? 900 : pistol ? 1800 : 1400);
-    this.tone(now, shotgun ? 105 : pistol ? 180 : 145, shotgun ? 38 : 55, shotgun ? 0.2 : 0.085, shotgun ? 0.24 : 0.12, 'square');
+    const smg = id === 'smg';
+    this.noiseBurst(now, shotgun ? 0.22 : pistol ? 0.09 : 0.075, shotgun ? 0.34 : smg ? 0.16 : 0.2, shotgun ? 900 : pistol ? 1800 : smg ? 2200 : 1400);
+    this.tone(now, shotgun ? 105 : pistol ? 180 : smg ? 190 : 145, shotgun ? 38 : 55, shotgun ? 0.2 : 0.085, shotgun ? 0.24 : smg ? 0.09 : 0.12, 'square');
     if (shotgun) this.noiseBurst(now + 0.045, 0.18, 0.1, 450);
   }
 

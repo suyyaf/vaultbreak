@@ -41,11 +41,15 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 ## Arsenal and perks
 
 - **M4A1:** automatic rifle, 30 rounds, controllable recoil.
+- **MP5:** fast-firing SMG, 30 rounds, low recoil, 150-round reserve.
 - **M9:** semi-automatic pistol, 15 rounds, high single-shot damage.
 - **M870:** pump-action shotgun, six shells, eight simulated pellets, range falloff, animated pump.
 - **Runner:** +15% movement speed.
 - **Scavenger:** +50% reserve ammunition.
 - **Juggernaut:** 125 maximum health with a slight speed penalty.
+- **Combat Medic:** revive teammates in 1.5 seconds instead of 3, restoring 75 HP instead of 50.
+
+Co-op includes a squad HUD with each player's health, downed state, and individual eliminations.
 
 Zombie waves introduce fast, fragile runners and slow, durable brutes from wave two. Heavy infected and the Warden display an attack wind-up before dealing damage.
 

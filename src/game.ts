@@ -23,6 +23,7 @@ export interface GameEvents {
   onEnd: (won: boolean, kills: number, shots: number, seconds: number) => void;
   onPause: () => void;
   onRoom: (room: string, players: number) => void;
+  onSquad: (players: { id: string; health: number; downed: boolean; kills: number }[]) => void;
   onRevive: (message: string, progress: number) => void;
   onStage: (stage: number, name: string) => void;
   onBoss: (health: number, maxHealth: number) => void;
@@ -205,6 +206,8 @@ export class Game {
     this.playerId = '';
     this.lastWorld = undefined;
     this.downed = false;
+    this.events.onRoom('', 0);
+    this.events.onSquad([]);
     for (const model of this.teammates.values()) model.dispose();
     this.teammates.clear();
   }
@@ -251,6 +254,7 @@ export class Game {
     this.collectedSupplies = new Set(world.supplies);
     for (const [id, mesh] of this.supplyMeshes) mesh.setEnabled(!this.collectedSupplies.has(id));
     this.events.onRoom(world.room, world.players.length);
+    this.events.onSquad(world.players.map((player) => ({ id: player.id, health: player.health, downed: player.downed, kills: player.kills })));
     const connected = new Set<string>();
     for (const player of world.players) {
       if (player.id === this.playerId) continue;
@@ -351,6 +355,8 @@ export class Game {
     this.events.onBoss(0, 800);
     this.gates.forEach((gate) => { gate.setEnabled(this.mode === 'dungeon'); gate.checkCollisions = this.mode === 'dungeon'; });
     this.events.onRevive('', 0);
+    this.downed = false;
+    for (const model of this.teammates.values()) { model.rotation.z = 0; model.scaling.y = 1; }
     for (const mesh of this.supplyMeshes.values()) mesh.setEnabled(false);
     for (const gate of this.gates) gate.checkCollisions = true;
     this.sendNetwork({ type: 'restart' });
@@ -883,7 +889,7 @@ export class Game {
     this.ammo--;
     this.shots++;
     this.recoil = Math.min(0.09, this.recoil + (this.weapon.id === 'shotgun' ? 0.065 : 0.035));
-    this.weaponKick = this.weapon.id === 'shotgun' ? 0.14 : this.weapon.id === 'pistol' ? 0.09 : 0.055;
+    this.weaponKick = this.weapon.id === 'shotgun' ? 0.14 : this.weapon.id === 'pistol' ? 0.09 : this.weapon.id === 'smg' ? 0.04 : 0.055;
     this.camera.rotation.x -= this.weapon.recoil * (this.aiming ? 0.5 : 1);
     this.camera.rotation.y += (Math.random() - 0.5) * this.weapon.recoil;
     this.events.onAmmo(this.ammo, this.reserve);

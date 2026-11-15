@@ -24,6 +24,7 @@ export interface PlayerState {
   downed: boolean;
   reviveProgress: number;
   kills: number;
+  health: number;
 }
 
 export interface WorldState {

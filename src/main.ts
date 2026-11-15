@@ -48,6 +48,14 @@ const game = new Game(engine, {
   onRoom: (room, players) => {
     byId('room-status').textContent = `ROOM ${room} · ${players}/4 OPERATIVES`;
   },
+  onSquad: (players) => {
+    byId('squad-status').replaceChildren(...players.map((player) => {
+      const row = document.createElement('div');
+      row.className = player.downed ? 'downed' : '';
+      row.textContent = `${player.id}  ${player.downed ? 'DOWN' : `${player.health} HP`}  ·  ${player.kills} ELIMS`;
+      return row;
+    }));
+  },
   onRevive: (message, progress) => {
     byId('revive-prompt').textContent = message;
     byId('revive-progress').style.width = `${progress * 100}%`;

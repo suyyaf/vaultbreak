@@ -46,6 +46,7 @@ class Room {
     this.ended = null;
     for (const client of this.clients) {
       client.health = PERKS[client.perk].maxHealth;
+      client.player.health = client.health;
       client.nextShotAt = 0;
       client.player.kills = 0;
       client.player.downed = false;
@@ -66,7 +67,7 @@ class Room {
     if (!this.clients.size) this.mode = mode;
     this.clients.add(client);
     client.room = this.code;
-    client.player = { id: client.player.id, x: (this.clients.size - 1) * 1.5, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0 };
+    client.player = { id: client.player.id, x: (this.clients.size - 1) * 1.5, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0, health: 100 };
     this.send(client, { type: 'joined', id: client.player.id, room: this.code });
     if (!this.timer) this.timer = setInterval(() => this.tick(), 50);
   }
@@ -112,7 +113,6 @@ class Room {
       const falloff = weapon.id === 'shotgun' ? Math.max(0.45, 1 - distance / weapon.range * 0.65) : 1;
       const damage = weapon.damage * (data.headshot ? 2 : 1) * pellets * falloff;
       enemy.health -= damage;
-      this.send(client, { type: 'hit' });
       if (enemy.health <= 0) { enemy.health = 0; enemy.alive = false; client.player.kills++; }
       this.send(client, { type: 'hit', killed: !enemy.alive });
       if (this.enemies.every((entry) => entry.stage !== this.stage || !entry.alive)) {
@@ -140,7 +140,7 @@ class Room {
       }
     }
     if (data.type === 'loadout' && data.weapon && data.loadout) {
-      client.weapon = data.weapon === 'pistol' || data.weapon === 'shotgun' ? data.weapon : 'rifle';
+      client.weapon = data.weapon === 'pistol' || data.weapon === 'shotgun' || data.weapon === 'smg' ? data.weapon : 'rifle';
       const perk = String(data.perk ?? '') as PerkId;
       if (PERKS[perk]) client.perk = perk;
       const value = data.loadout as Loadout;
@@ -176,13 +176,13 @@ class Room {
           client.reviveStartedAt = 0;
           client.player.reviveProgress = 0;
         } else {
-          client.player.reviveProgress = Math.min(1, (Date.now() - client.reviveStartedAt) / 3000);
+          client.player.reviveProgress = Math.min(1, (Date.now() - client.reviveStartedAt) / PERKS[reviver.perk].reviveMs);
           if (client.player.reviveProgress >= 1) {
             client.player.downed = false;
             client.player.reviveProgress = 0;
-            client.health = 50;
+            client.health = PERKS[reviver.perk].reviveHealth;
             client.downedAt = 0;
-            this.send(client, { type: 'damaged', health: 50 });
+            this.send(client, { type: 'damaged', health: client.health });
             this.send(reviver, { type: 'notice', message: `${client.player.id} REVIVED` });
           }
         }
@@ -253,7 +253,10 @@ class Room {
       wave: this.wave,
       nextWaveAt: this.nextWaveAt,
     };
-    for (const client of this.clients) this.send(client, { type: 'state', state });
+    for (const client of this.clients) {
+      client.player.health = client.health;
+      this.send(client, { type: 'state', state });
+    }
   }
 
   distance(enemy: EnemyState, player: PlayerState) { return Math.hypot(player.x - enemy.x, player.z - enemy.z); }
@@ -275,7 +278,7 @@ const wss = new WebSocketServer({ port });
 const rooms = new Map<string, Room>();
 let nextId = 1;
 wss.on('connection', (ws) => {
-  const client: Client = { ws, room: '', health: 100, weapon: 'rifle', perk: 'runner', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0 } };
+  const client: Client = { ws, room: '', health: 100, weapon: 'rifle', perk: 'runner', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0, health: 100 } };
   ws.on('message', (raw) => {
     try {
       const data = JSON.parse(raw.toString()) as { type: string; room?: string; mode?: string };
