@@ -2,7 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#101312" />
     <meta name="theme-color" content="#101312" />
     <meta name="description" content="Vaultbreak — a co-op dungeon FPS prototype." />
     <title>VAULTBREAK // Prototype 01</title>
@@ -97,7 +98,20 @@
         <div class="ammo"><small><i id="weapon-name">M4A1</i> <span id="weapon-mode">AUTO</span></small><div><span id="ammo">30</span><b>/ 120</b></div><div id="reload-label" class="reload-label"></div></div>
       </div>
       <div class="hud-help">[1/2] WEAPONS <span>·</span> [3] HEAL <span>·</span> [4] FRAG <span>·</span> [R] RELOAD <span>·</span> [SPACE] JUMP <span>·</span> [C] CROUCH / SLIDE <span>·</span> [ESC] PAUSE</div>
+      <div id="mobile-controls" class="mobile-controls">
+        <div id="move-stick" class="move-stick"><i id="move-knob"></i><span>MOVE</span></div>
+        <div id="aim-zone" class="aim-zone"></div>
+        <button id="mobile-pause" class="mobile-pause" aria-label="Pause">Ⅱ</button>
+        <div class="mobile-equipment"><button data-mobile-slot="1">1 <b>PRIMARY</b></button><button data-mobile-slot="2">2 <b>SECONDARY</b></button><button data-mobile-heal>+ <b>HEAL</b></button><button data-mobile-grenade>4 <b>FRAG</b></button></div>
+        <button id="mobile-fire" class="mobile-action mobile-fire"><span>FIRE</span></button>
+        <button id="mobile-scope" class="mobile-action mobile-scope">ADS</button>
+        <button id="mobile-reload" class="mobile-action mobile-reload">↻<small>RELOAD</small></button>
+        <button id="mobile-jump" class="mobile-action mobile-jump">↑<small>JUMP</small></button>
+        <button id="mobile-crouch" class="mobile-action mobile-crouch">C<small>CROUCH</small></button>
+        <button id="mobile-sprint" class="mobile-sprint">SPRINT</button>
+      </div>
     </section>
+    <div id="rotate-device" class="rotate-device"><div class="phone-icon">↻</div><h2>ROTATE TO LANDSCAPE</h2><p>VAULTBREAK is built for horizontal play.</p></div>
 
     <section id="pause" class="overlay hidden">
       <div class="result-card"><div class="eyebrow">OPERATION PAUSED</div><h2>TAKE A BREATH.</h2><p>The vault will wait.</p><button id="resume" class="deploy">RESUME</button><button id="pause-settings" class="text-button">SETTINGS</button><button id="restart-pause" class="text-button">RESTART OPERATION</button><button id="main-menu" class="text-button">QUIT TO MAIN MENU</button></div>

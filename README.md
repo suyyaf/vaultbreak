@@ -41,6 +41,10 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 3. **Next — balance and content:** weapon feel, enemy pacing, wave difficulty, UI, and performance based on complete solo/co-op playtests, followed by unlocks and new objectives.
 4. **Later — expansion:** more weapons, maps, and objectives.
 
+## Mobile
+
+Landscape phones and tablets have dedicated multi-touch FPS controls: analog movement, drag aiming, hold-to-fire, ADS, sprint, reload, jump, crouch/slide, weapon switching, health packs, grenades, and pause. Menus use a compact landscape layout with safe-area spacing; portrait orientation displays a rotate prompt.
+
 ## Deployment and settings
 
 The welcome screen leads to a separate deployment preparation screen. Choose the operation, one of four visible 3D operators, primary/secondary weapons, attachments, and an optional co-op room, then select **Start Deployment**. Back or Escape returns to the welcome screen without starting the game. Selecting an operator opens an isolated close-up inspection stage with an animated class-specific pose and specialty profile. **Tank** has 125 HP and can carry an AK-47 or M870 as a heavy secondary. Settings are available from both the welcome and Esc pause screens: master volume, field of view, mouse sensitivity, reduced camera motion, and fullscreen. Settings persist locally.
@@ -56,6 +60,8 @@ The welcome screen leads to a separate deployment preparation screen. Choose the
 - **Scavenger:** +50% reserve ammunition.
 - **Juggernaut:** 125 maximum health with a slight speed penalty.
 - **Combat Medic:** revive teammates in 1.5 seconds instead of 3, restoring 75 HP instead of 50.
+
+Dungeon hostiles carry visible rifles with aiming poses and attack muzzle flashes. Infected have torn clothing, exposed wounds and ribs, crooked posture, reaching arms, and distinct Runner, Brute, and Spitter details.
 
 Shots scale by hit region: **2× head, 1× torso, and 0.65× arms/legs**, using the actual impact point and enemy scale. Co-op validates and applies the same multipliers. Health packs and their resupply are server-authoritative in co-op.
 

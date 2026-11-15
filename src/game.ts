@@ -1,6 +1,6 @@
 import {
   Color3, Color4, DirectionalLight, Engine, GlowLayer, HemisphericLight,
-  Mesh, MeshBuilder, Ray, Scene, StandardMaterial, TransformNode, UniversalCamera, Vector3
+  Mesh, MeshBuilder, Ray, Scene, StandardMaterial, TransformNode, UniversalCamera, Vector2, Vector3
 } from '@babylonjs/core';
 import { getWeapon, Loadout, WeaponId, WeaponSpec, WEAPONS } from './weapons';
 import { ServerMessage, WorldState } from './network';
@@ -58,6 +58,8 @@ interface Enemy {
   phase: number;
   hitAt: number;
   windupUntil: number;
+  weapon?: TransformNode;
+  muzzleFlash?: Mesh;
   telegraph?: Mesh;
 }
 
@@ -133,6 +135,9 @@ export class Game {
   private readonly operatorModels = new Map<PerkId, OperatorRig>();
   private operatorSelectedAt = 0;
   private operatorInspection = false;
+  private readonly touchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  private mobileMove = Vector2.Zero();
+  private mobileSprint = false;
   private readonly operatorStage: TransformNode;
   private readonly operatorStageLight: HemisphericLight;
   private readonly acidProjectiles = new Map<number, AcidProjectile>();
@@ -187,6 +192,7 @@ export class Game {
     this.operatorStage.setEnabled(false);
     this.buildOperatorPreview();
     this.bindInput();
+    if (this.touchDevice) this.bindMobileInput();
     this.scene.onBeforeRenderObservable.add(() => this.update());
   }
 
@@ -530,6 +536,7 @@ export class Game {
   }
 
   private lockPointer() {
+    if (this.touchDevice) return;
     try {
       const request = this.engine.getRenderingCanvas()?.requestPointerLock();
       if (request instanceof Promise) void request.catch(() => this.pause());
@@ -544,6 +551,8 @@ export class Game {
     this.events.onScope(false);
     this.firing = false;
     this.keys.clear();
+    this.mobileMove = Vector2.Zero();
+    this.mobileSprint = false;
     this.events.onPause();
   }
 
@@ -586,6 +595,64 @@ export class Game {
       else if (this.pointerLocked && this.state === 'playing') this.pause();
     });
     document.addEventListener('pointerlockerror', () => this.pause());
+  }
+
+  private bindMobileInput() {
+    const element = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+    const stick = element('move-stick');
+    const knob = element('move-knob');
+    let movePointer = -1;
+    const move = (event: PointerEvent) => {
+      const rect = stick.getBoundingClientRect();
+      const x = event.clientX - rect.left - rect.width / 2;
+      const y = event.clientY - rect.top - rect.height / 2;
+      const radius = rect.width * 0.32;
+      const length = Math.hypot(x, y);
+      const scale = length > radius ? radius / length : 1;
+      const dx = x * scale, dy = y * scale;
+      this.mobileMove.set(dx / radius, dy / radius);
+      knob.style.transform = `translate(${dx}px,${dy}px)`;
+    };
+    stick.addEventListener('pointerdown', (event) => {
+      event.preventDefault(); movePointer = event.pointerId; stick.setPointerCapture(event.pointerId); move(event);
+    });
+    stick.addEventListener('pointermove', (event) => { if (event.pointerId === movePointer) move(event); });
+    const releaseMove = (event: PointerEvent) => {
+      if (event.pointerId !== movePointer) return;
+      movePointer = -1; this.mobileMove = Vector2.Zero(); knob.style.transform = '';
+    };
+    stick.addEventListener('pointerup', releaseMove); stick.addEventListener('pointercancel', releaseMove);
+    let aimPointer = -1, aimX = 0, aimY = 0;
+    const aimZone = element('aim-zone');
+    aimZone.addEventListener('pointerdown', (event) => {
+      event.preventDefault(); aimPointer = event.pointerId; aimX = event.clientX; aimY = event.clientY; aimZone.setPointerCapture(event.pointerId);
+    });
+    aimZone.addEventListener('pointermove', (event) => {
+      if (event.pointerId !== aimPointer || this.state !== 'playing') return;
+      this.camera.rotation.y += (event.clientX - aimX) * this.mouseSensitivity * 1.45;
+      this.camera.rotation.x += (event.clientY - aimY) * this.mouseSensitivity * 1.45;
+      this.camera.rotation.x = Math.max(-1.35, Math.min(1.35, this.camera.rotation.x));
+      aimX = event.clientX; aimY = event.clientY;
+    });
+    const releaseAim = (event: PointerEvent) => { if (event.pointerId === aimPointer) aimPointer = -1; };
+    aimZone.addEventListener('pointerup', releaseAim); aimZone.addEventListener('pointercancel', releaseAim);
+    const hold = (id: string, begin: () => void, end: () => void) => {
+      const button = element(id);
+      button.addEventListener('pointerdown', (event) => { event.preventDefault(); button.setPointerCapture(event.pointerId); button.classList.add('active'); begin(); });
+      const release = () => { button.classList.remove('active'); end(); };
+      button.addEventListener('pointerup', release); button.addEventListener('pointercancel', release);
+    };
+    hold('mobile-fire', () => { this.firing = true; this.triggerReady = true; }, () => { this.firing = false; this.triggerReady = true; });
+    hold('mobile-sprint', () => { this.mobileSprint = true; }, () => { this.mobileSprint = false; });
+    const tap = (id: string, action: () => void) => element(id).addEventListener('pointerdown', (event) => { event.preventDefault(); if (this.state === 'playing' && !this.downed) action(); });
+    tap('mobile-scope', () => { this.aiming = !this.aiming; this.events.onScope(this.aiming && this.loadout.optic); });
+    tap('mobile-reload', () => this.reload());
+    tap('mobile-jump', () => this.jump());
+    tap('mobile-crouch', () => this.slide());
+    element('mobile-pause').addEventListener('pointerdown', (event) => { event.preventDefault(); if (this.state === 'playing') this.pause(); });
+    document.querySelectorAll<HTMLButtonElement>('[data-mobile-slot]').forEach((button) => button.addEventListener('pointerdown', (event) => { event.preventDefault(); this.switchWeapon(Number(button.dataset.mobileSlot) as 1 | 2); }));
+    element<HTMLButtonElement>('mobile-controls').querySelector('[data-mobile-heal]')!.addEventListener('pointerdown', (event) => { event.preventDefault(); this.useMedkit(); });
+    element<HTMLButtonElement>('mobile-controls').querySelector('[data-mobile-grenade]')!.addEventListener('pointerdown', (event) => { event.preventDefault(); this.throwGrenade(); });
   }
 
   private jump() {
@@ -873,16 +940,41 @@ export class Game {
         make('warden shoulder blade', 0.35, 0.6, 0.28, 1.95, armorMat, -0.64).rotation.z = -0.3;
         make('warden shoulder blade', 0.35, 0.6, 0.28, 1.95, armorMat, 0.64).rotation.z = 0.3;
       }
+      const leftArm = make('left arm', 0.2, 0.75, 0.23, 1.35, bodyMat, -0.5);
+      const rightArm = make('right arm', 0.2, 0.75, 0.23, 1.35, bodyMat, 0.5);
       const limbs = [
         make('left leg', 0.25, 0.85, 0.27, 0.48, armorMat, -0.2),
         make('right leg', 0.25, 0.85, 0.27, 0.48, armorMat, 0.2),
-        make('left arm', 0.2, 0.75, 0.23, 1.35, bodyMat, -0.5),
-        make('right arm', 0.2, 0.75, 0.23, 1.35, bodyMat, 0.5),
+        leftArm,
+        rightArm,
       ];
+      const weapon = new TransformNode('hostile rifle', this.scene);
+      weapon.parent = root;
+      weapon.position.set(0.27, 1.4, 0.34);
+      const gunPart = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, mat = armorMat) => {
+        const mesh = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, this.scene);
+        mesh.parent = weapon; mesh.position.set(x, y, z); mesh.material = mat; mesh.isPickable = false;
+        return mesh;
+      };
+      gunPart('hostile receiver', 0.15, 0.17, 0.65, 0, 0, 0);
+      gunPart('hostile barrel', 0.055, 0.055, 0.6, 0, 0.025, 0.58, bodyMat);
+      gunPart('hostile stock', 0.17, 0.22, 0.32, 0, -0.02, -0.45);
+      gunPart('hostile magazine', 0.12, 0.3, 0.18, 0, -0.21, 0.02).rotation.x = -0.2;
+      gunPart('hostile optic', 0.11, 0.11, 0.22, 0, 0.14, 0.03);
+      const muzzleFlash = MeshBuilder.CreateCylinder('hostile muzzle flash', { diameterTop: 0, diameterBottom: 0.3, height: 0.5, tessellation: 5 }, this.scene);
+      muzzleFlash.parent = weapon; muzzleFlash.rotation.x = Math.PI / 2; muzzleFlash.position.set(0, 0.025, 1.02);
+      muzzleFlash.material = this.material(new Color3(1, 0.55, 0.12), 2.5); muzzleFlash.isPickable = false; muzzleFlash.setEnabled(false);
+      make('hostile handguard grip', 0.23, 0.23, 0.25, 1.34, bodyMat, -0.33).position.z = 0.49;
+      make('hostile trigger hand', 0.23, 0.23, 0.25, 1.34, bodyMat, 0.4).position.z = 0.31;
+      if (spawn.boss) {
+        weapon.scaling.setAll(1.25);
+        gunPart('warden heavy barrel shroud', 0.25, 0.25, 0.65, 0, 0.02, 0.5, bodyMat);
+      }
       body.metadata = { enemyIndex: index, multiplier: 1 };
       head.metadata = { enemyIndex: index, multiplier: 2 };
       body.isPickable = true;
       head.isPickable = true;
+      for (const limb of limbs) { limb.isPickable = true; limb.metadata = { enemyIndex: index, multiplier: 0.65 }; }
       let telegraph: Mesh | undefined;
       if (spawn.boss) {
         telegraph = MeshBuilder.CreateDisc('warden attack warning', { radius: 1.6, tessellation: 32 }, this.scene);
@@ -892,7 +984,7 @@ export class Game {
         telegraph.isPickable = false;
         telegraph.setEnabled(false);
       }
-      this.enemies.push({ id: index, root, body, head, limbs, health: 100, alive: true, attackAt: 0, phase: index, hitAt: 0, windupUntil: 0, telegraph });
+      this.enemies.push({ id: index, root, body, head, limbs, health: 100, alive: true, attackAt: 0, phase: index, hitAt: 0, windupUntil: 0, weapon, muzzleFlash, telegraph });
     });
   }
 
@@ -904,6 +996,8 @@ export class Game {
     const bruteSkin = this.material(new Color3(0.24, 0.34, 0.27));
     const spitterSkin = this.material(new Color3(0.22, 0.48, 0.18));
     const acidMat = this.material(new Color3(0.65, 1, 0.12), 1.6);
+    const wound = this.material(new Color3(0.32, 0.045, 0.035));
+    const bone = this.material(new Color3(0.62, 0.57, 0.4));
     for (const spawn of ZOMBIE_SPAWNS) {
       const index = this.enemies.length;
       const root = new TransformNode(`infected ${spawn.id + 1}`, this.scene);
@@ -923,19 +1017,43 @@ export class Game {
       };
       const body = make('infected torso', 0.68, 0.8, 0.38, 0, 1.3, 0, cloth);
       body.rotation.x = 0.2;
-      const head = make('infected head', 0.42, 0.43, 0.4, 0, 1.91, 0.12, skinMat);
-      make('infected eyes', 0.29, 0.05, 0.025, 0, 1.96, 0.33, kind === 'spitter' ? acidMat : eye);
+      body.rotation.z = spawn.id % 2 ? 0.1 : -0.1;
+      const head = make('infected head', 0.42, 0.43, 0.4, 0.08, 1.91, 0.12, skinMat);
+      head.rotation.z = spawn.id % 2 ? 0.2 : -0.22;
+      make('infected eyes', 0.29, 0.05, 0.025, 0.08, 1.96, 0.33, kind === 'spitter' ? acidMat : eye);
+      make('infected mouth', 0.24, 0.11, 0.035, 0.06, 1.78, 0.34, wound);
+      make('infected lower jaw', 0.27, 0.08, 0.16, 0.06, 1.72, 0.27, skinMat).rotation.x = 0.18;
+      make('torn shirt chest', 0.36, 0.38, 0.025, -0.1, 1.4, 0.22, skinMat).rotation.z = -0.12;
+      make('infected chest wound', 0.22, 0.17, 0.035, -0.12, 1.38, 0.245, wound).rotation.z = 0.35;
+      make('exposed ribs', 0.3, 0.035, 0.045, -0.1, 1.44, 0.27, bone).rotation.z = -0.12;
+      make('exposed ribs', 0.26, 0.035, 0.045, -0.12, 1.35, 0.27, bone).rotation.z = -0.12;
+      make('torn sleeve', 0.27, 0.3, 0.28, -0.43, 1.55, 0, cloth).rotation.z = -0.12;
+      make('infected shoulder wound', 0.17, 0.12, 0.03, 0.39, 1.56, 0.15, wound);
+      make('infected belt', 0.72, 0.12, 0.41, 0, 0.95, 0, wound);
       if (kind === 'spitter') {
         make('spitter acid sac', 0.46, 0.36, 0.12, 0, 1.42, 0.24, acidMat);
         make('spitter jaw', 0.28, 0.16, 0.2, 0, 1.75, 0.25, spitterSkin);
       }
-      const limbs = [
-        make('infected left leg', 0.23, 0.8, 0.25, -0.2, 0.44, 0, cloth),
-        make('infected right leg', 0.23, 0.8, 0.25, 0.2, 0.44, 0, cloth),
-        make('infected left arm', 0.2, 0.2, 0.72, -0.43, 1.42, 0.35, skinMat),
-        make('infected right arm', 0.2, 0.2, 0.72, 0.43, 1.42, 0.35, skinMat),
-      ];
-      for (const [part, multiplier] of [[body, 1], [head, 2]] as const) {
+      const leftLeg = make('infected left leg', 0.23, 0.8, 0.25, -0.2, 0.44, 0, cloth);
+      const rightLeg = make('infected right leg', 0.23, 0.8, 0.25, 0.2, 0.44, -0.09, cloth);
+      rightLeg.rotation.z = 0.09;
+      const leftArm = make('infected left arm', 0.2, 0.2, 0.72, -0.43, 1.42, 0.35, skinMat);
+      const rightArm = make('infected right arm', 0.2, 0.2, 0.72, 0.43, 1.5, 0.28, skinMat);
+      rightArm.rotation.z = -0.22;
+      leftArm.rotation.x = 0.12;
+      make('infected left hand', 0.24, 0.26, 0.22, -0.43, 1.39, 0.77, skinMat).rotation.x = 0.35;
+      make('infected right hand', 0.24, 0.26, 0.22, 0.53, 1.46, 0.67, skinMat).rotation.z = -0.2;
+      make('infected arm wound', 0.21, 0.08, 0.22, -0.43, 1.43, 0.48, wound);
+      const limbs = [leftLeg, rightLeg, leftArm, rightArm];
+      if (kind === 'runner') {
+        head.rotation.x = -0.15;
+        make('runner torn vest', 0.73, 0.22, 0.43, 0, 1.1, 0, wound);
+      }
+      if (kind === 'brute') {
+        make('brute swollen shoulder', 0.42, 0.42, 0.44, -0.48, 1.56, 0, skinMat);
+        make('brute exposed chest', 0.46, 0.35, 0.06, 0.08, 1.42, 0.24, wound);
+      }
+      for (const [part, multiplier] of [[body, 1], [head, 2], ...limbs.map((limb) => [limb, 0.65] as const)] as const) {
         part.metadata = { enemyIndex: index, multiplier };
         part.isPickable = true;
       }
@@ -1054,7 +1172,19 @@ export class Game {
       const windup = enemy.windupUntil > now;
       enemy.telegraph?.setEnabled(windup && (meta.kind === 'brute' || meta.kind === 'spitter' || meta.boss === true));
       if (enemy.telegraph?.isEnabled()) enemy.telegraph.scaling.setAll(0.85 + Math.sin(now * 0.02) * 0.15);
-      enemy.body.rotation.z = windup ? Math.sin(now * 0.025) * 0.09 : enemy.hitAt > 0 ? Math.sin(enemy.hitAt * 0.04) * 0.13 : 0;
+      const stagger = meta.zombie ? (enemy.phase % 2 ? 0.1 : -0.1) : 0;
+      enemy.body.rotation.z = stagger + (windup ? Math.sin(now * 0.025) * 0.09 : enemy.hitAt > 0 ? Math.sin(enemy.hitAt * 0.04) * 0.13 : 0);
+      enemy.muzzleFlash?.setEnabled(!meta.zombie && windup && (enemy.windupUntil - now) < 100);
+      if (enemy.weapon) {
+        enemy.weapon.rotation.x = windup ? -0.04 + Math.sin(now * 0.04) * 0.025 : Math.sin(now * 0.003 + enemy.phase) * 0.025;
+        enemy.limbs[2].rotation.x = -0.95;
+        enemy.limbs[3].rotation.x = -1.05;
+      }
+      if (meta.zombie) {
+        enemy.head.rotation.z = (enemy.phase % 2 ? 0.2 : -0.22) + Math.sin(now * 0.003 + enemy.phase) * 0.06;
+        enemy.limbs[2].rotation.x = 0.12 + Math.sin(now * 0.006 + enemy.phase) * 0.12;
+        enemy.limbs[3].rotation.x = Math.sin(now * 0.007 + enemy.phase) * 0.16;
+      }
       if (windup && meta.zombie) enemy.limbs.slice(2).forEach((limb) => { limb.rotation.x = -0.55; });
     }
   }
@@ -1069,10 +1199,14 @@ export class Game {
     if (this.keys.has('KeyS')) move.subtractInPlace(forward);
     if (this.keys.has('KeyD')) move.addInPlace(right);
     if (this.keys.has('KeyA')) move.subtractInPlace(right);
+    if (this.mobileMove.lengthSquared() > 0.01) {
+      move.addInPlace(forward.scale(-this.mobileMove.y));
+      move.addInPlace(right.scale(this.mobileMove.x));
+    }
     const moving = move.lengthSquared() > 0;
     if (moving) {
       move.normalize();
-      const sprint = this.keys.has('ShiftLeft') && !this.aiming && !this.crouched;
+      const sprint = (this.keys.has('ShiftLeft') || this.mobileSprint || this.mobileMove.length() > 0.92) && !this.aiming && !this.crouched;
       const speed = (this.crouched ? 2.2 : sprint ? 6.2 : this.aiming ? 2.7 : 4.2) * PERKS[this.perk].speed;
       if (!this.sliding) this.camera.cameraDirection.addInPlace(move.scale(speed * dt));
       this.walkTime += dt * (sprint ? 12 : 8);
