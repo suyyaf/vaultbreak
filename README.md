@@ -43,7 +43,7 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 
 ## Deployment and settings
 
-The welcome screen provides operation selection, four visible 3D operators, primary/secondary weapons, and attachments. **Tank** has 125 HP and can carry an AK-47 or M870 as a heavy secondary. Settings are available from both the welcome and Esc pause screens: master volume, field of view, mouse sensitivity, reduced camera motion, and fullscreen. Settings persist locally.
+The welcome screen leads to a separate deployment preparation screen. Choose the operation, one of four visible 3D operators, primary/secondary weapons, attachments, and an optional co-op room, then select **Start Deployment**. Back or Escape returns to the welcome screen without starting the game. Selecting an operator opens an isolated close-up inspection stage with an animated class-specific pose and specialty profile. **Tank** has 125 HP and can carry an AK-47 or M870 as a heavy secondary. Settings are available from both the welcome and Esc pause screens: master volume, field of view, mouse sensitivity, reduced camera motion, and fullscreen. Settings persist locally.
 
 ## Arsenal and perks
 

@@ -37,6 +37,15 @@ export interface GameEvents {
   onScope: (active: boolean) => void;
 }
 
+interface OperatorRig {
+  root: TransformNode;
+  torso: TransformNode;
+  head: TransformNode;
+  leftArm: TransformNode;
+  rightArm: TransformNode;
+  rifle: TransformNode;
+}
+
 interface Enemy {
   id: number;
   root: TransformNode;
@@ -121,7 +130,11 @@ export class Game {
   private perk: PerkId = 'runner';
   private pumpMesh?: TransformNode;
   private readonly teammateTargets = new Map<string, { position: Vector3; yaw: number }>();
-  private readonly operatorModels = new Map<PerkId, TransformNode>();
+  private readonly operatorModels = new Map<PerkId, OperatorRig>();
+  private operatorSelectedAt = 0;
+  private operatorInspection = false;
+  private readonly operatorStage: TransformNode;
+  private readonly operatorStageLight: HemisphericLight;
   private readonly acidProjectiles = new Map<number, AcidProjectile>();
   private readonly acidMeshes = new Map<number, Mesh>();
   private nextAcidId = 1;
@@ -162,6 +175,16 @@ export class Game {
     this.spawnEnemies();
     this.spawnZombies();
     this.buildGateMarker();
+    this.operatorStage = new TransformNode('operator inspection stage', this.scene);
+    this.operatorStage.position.set(0, 0, 200);
+    this.operatorStageLight = new HemisphericLight('operator inspection fill', new Vector3(0.2, 1, 0.6), this.scene);
+    this.operatorStageLight.intensity = 1.5;
+    this.operatorStageLight.setEnabled(false);
+    const backdrop = MeshBuilder.CreateBox('operator stage backdrop', { width: 24, height: 12, depth: 0.3 }, this.scene);
+    backdrop.parent = this.operatorStage; backdrop.position.set(0, 4, -3); backdrop.material = this.material(new Color3(0.025, 0.035, 0.028)); backdrop.isPickable = false;
+    const floor = MeshBuilder.CreateCylinder('operator stage floor', { diameter: 10, height: 0.15, tessellation: 12 }, this.scene);
+    floor.parent = this.operatorStage; floor.position.y = -0.05; floor.material = this.material(new Color3(0.07, 0.09, 0.07)); floor.isPickable = false;
+    this.operatorStage.setEnabled(false);
     this.buildOperatorPreview();
     this.bindInput();
     this.scene.onBeforeRenderObservable.add(() => this.update());
@@ -171,12 +194,30 @@ export class Game {
 
   setMode(mode: GameMode) { this.mode = mode; }
 
+  setOperatorInspection(active: boolean) {
+    this.operatorInspection = active;
+    this.operatorStage.setEnabled(active);
+    this.operatorStageLight.setEnabled(active);
+    this.operatorSelectedAt = performance.now();
+    for (const [id, rig] of this.operatorModels) {
+      const selected = id === this.perk;
+      rig.root.setEnabled(!active || selected);
+      rig.root.position.set(active && selected ? 0 : 2.2 + ['runner', 'scavenger', 'juggernaut', 'medic'].indexOf(id) * 1.75, 0.15, active && selected ? 200 : 2.7);
+      rig.root.scaling.setAll(active && selected ? 1.65 : 0.82);
+    }
+  }
+
   setPerk(perk: PerkId) {
     this.perk = PERKS[perk] ? perk : 'runner';
-    for (const [id, model] of this.operatorModels) {
+    this.operatorSelectedAt = performance.now();
+    for (const [id, rig] of this.operatorModels) {
       const selected = id === this.perk;
-      model.scaling.setAll(selected ? 1.12 : 1);
-      (model.getChildMeshes().find((mesh) => mesh.name === 'operator platform')?.material as StandardMaterial).emissiveColor = selected ? new Color3(0.35, 0.5, 0.1) : new Color3(0.01, 0.015, 0.01);
+      rig.root.setEnabled(!this.operatorInspection || selected);
+      if (this.operatorInspection && selected) {
+        rig.root.position.set(0, 0.15, 200);
+        rig.root.scaling.setAll(1.65);
+      }
+      (rig.root.getChildMeshes().find((mesh) => mesh.name === 'operator platform')?.material as StandardMaterial).emissiveColor = selected ? new Color3(0.35, 0.5, 0.1) : new Color3(0.01, 0.015, 0.01);
     }
   }
 
@@ -200,7 +241,7 @@ export class Game {
     this.keys.clear();
     this.events.onScope(false);
     this.gun.setEnabled(false);
-    for (const model of this.operatorModels.values()) model.setEnabled(true);
+    for (const rig of this.operatorModels.values()) rig.root.setEnabled(true);
   }
 
   setLoadout(weapon: WeaponId, loadout: Loadout) {
@@ -383,7 +424,10 @@ export class Game {
   start() {
     this.reset();
     this.state = 'playing';
-    for (const model of this.operatorModels.values()) model.setEnabled(false);
+    this.operatorInspection = false;
+    this.operatorStage.setEnabled(false);
+    this.operatorStageLight.setEnabled(false);
+    for (const rig of this.operatorModels.values()) rig.root.setEnabled(false);
     this.pointerLocked = false;
     this.startedAt = performance.now();
     const me = this.lastWorld?.players.find((player) => player.id === this.playerId);
@@ -683,31 +727,93 @@ export class Game {
       const armor = this.material(colors[index], 0.28);
       const dark = this.material(new Color3(0.08, 0.1, 0.09));
       const accent = this.material(new Color3(0.75, 0.9, 0.4), 0.8);
-      const part = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, material = armor) => {
+      const part = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, material = armor, parent: TransformNode = root) => {
         const mesh = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, this.scene);
-        mesh.parent = root; mesh.position.set(x, y, z); mesh.material = material; mesh.isPickable = false;
+        mesh.parent = parent; mesh.position.set(x, y, z); mesh.material = material; mesh.isPickable = false;
         return mesh;
       };
+      const joint = (name: string, x: number, y: number, z: number) => {
+        const node = new TransformNode(name, this.scene);
+        node.parent = root; node.position.set(x, y, z);
+        return node;
+      };
+      const torso = joint('operator torso joint', 0, 0.95, 0);
+      const head = joint('operator head joint', 0, 1.76, 0);
+      const leftArm = joint('operator left arm joint', -0.48, 1.66, 0);
+      const rightArm = joint('operator right arm joint', 0.48, 1.66, 0);
+      const rifle = joint('operator rifle joint', 0.25, 1.35, 0.38);
       const bulk = id === 'juggernaut' ? 1.25 : id === 'runner' ? 0.88 : 1;
-      part('operator torso', 0.72 * bulk, 0.82, 0.4, 0, 1.35, 0);
-      part('operator head', 0.4, 0.4, 0.4, 0, 2, 0, dark);
-      part('operator visor', 0.3, 0.07, 0.025, 0, 2.02, 0.21, accent);
-      for (const x of [-0.2 * bulk, 0.2 * bulk]) {
-        part('operator leg', 0.25, 0.85, 0.28, x, 0.47, 0, dark);
-        part('operator arm', 0.21 * bulk, 0.78, 0.25, x * 2.6, 1.35, 0);
-      }
-      part('operator chest', 0.55 * bulk, 0.28, 0.08, 0, 1.5, 0.24, dark);
-      if (id === 'juggernaut') for (const x of [-0.58, 0.58]) part('tank shoulder', 0.38, 0.35, 0.48, x, 1.62, 0, dark);
-      if (id === 'scavenger') part('scavenger pack', 0.65, 0.85, 0.34, 0, 1.25, -0.32, dark);
+      part('operator torso', 0.72 * bulk, 0.82, 0.4, 0, 0.4, 0, armor, torso);
+      part('operator head', 0.4, 0.4, 0.4, 0, 0.24, 0, dark, head);
+      part('operator visor', 0.3, 0.07, 0.025, 0, 0.26, 0.21, accent, head);
+      for (const x of [-0.2 * bulk, 0.2 * bulk]) part('operator leg', 0.25, 0.85, 0.28, x, 0.47, 0, dark);
+      part('operator arm', 0.21 * bulk, 0.78, 0.25, 0, -0.31, 0, armor, leftArm);
+      part('operator arm', 0.21 * bulk, 0.78, 0.25, 0, -0.31, 0, armor, rightArm);
+      part('operator chest', 0.55 * bulk, 0.28, 0.08, 0, 0.55, 0.24, dark, torso);
+      if (id === 'juggernaut') for (const [x, arm] of [[-0.1, leftArm], [0.1, rightArm]] as const) part('tank shoulder', 0.38, 0.35, 0.48, x, -0.04, 0, dark, arm);
+      if (id === 'scavenger') part('scavenger pack', 0.65, 0.85, 0.34, 0, 0.3, -0.32, dark, torso);
       if (id === 'medic') {
-        part('medic cross', 0.32, 0.1, 0.03, 0, 1.48, 0.3, accent);
-        part('medic cross', 0.1, 0.32, 0.03, 0, 1.48, 0.3, accent);
+        part('medic cross', 0.32, 0.1, 0.03, 0, 0.53, 0.3, accent, torso);
+        part('medic cross', 0.1, 0.32, 0.03, 0, 0.53, 0.3, accent, torso);
       }
-      if (id === 'runner') part('runner hood', 0.48, 0.18, 0.46, 0, 2.19, -0.02, armor);
-      part('operator rifle', 0.12, 0.13, 1, 0.33, 1.35, 0.25, dark).rotation.x = -0.35;
+      if (id === 'runner') part('runner hood', 0.48, 0.18, 0.46, 0, 0.43, -0.02, armor, head);
+      part('operator rifle', 0.12, 0.13, 1, 0, 0, 0, dark, rifle);
+      part('operator rifle stock', 0.16, 0.23, 0.34, 0, 0, -0.5, dark, rifle);
+      rifle.rotation.x = -0.35;
       const platform = MeshBuilder.CreateCylinder('operator platform', { diameter: 1.65, height: 0.12, tessellation: 6 }, this.scene);
       platform.parent = root; platform.position.y = -0.1; platform.material = this.material(new Color3(0.12, 0.15, 0.12)); platform.isPickable = false;
-      this.operatorModels.set(id, root);
+      this.operatorModels.set(id, { root, torso, head, leftArm, rightArm, rifle });
+    });
+  }
+
+  private updateOperatorPreview(dt: number) {
+    const now = performance.now();
+    const ids: PerkId[] = ['runner', 'scavenger', 'juggernaut', 'medic'];
+    const ease = Math.min(1, dt * 7);
+    const selectedAge = Math.min(1, (now - this.operatorSelectedAt) / 1100);
+    const selectPulse = Math.sin(selectedAge * Math.PI);
+    ids.forEach((id, index) => {
+      const rig = this.operatorModels.get(id)!;
+      const selected = id === this.perk;
+      const time = now * 0.001 + index * 1.7;
+      const targetX = this.operatorInspection && selected ? 0 : selected ? 8.25 : 2.2 + index * 1.75;
+      const targetZ = this.operatorInspection && selected ? 200 : selected ? 7.7 : 2.7;
+      rig.root.setEnabled(!this.operatorInspection || selected);
+      rig.root.position.x += (targetX - rig.root.position.x) * ease;
+      rig.root.position.z += (targetZ - rig.root.position.z) * ease;
+      rig.root.position.y = 0.15 + Math.sin(time * 1.7) * 0.012;
+      rig.root.scaling.setAll(rig.root.scaling.x + ((selected ? this.operatorInspection ? 1.65 : 1.42 : 0.82) - rig.root.scaling.x) * ease);
+      rig.root.rotation.y += ((selected ? -0.22 : 0.12) - rig.root.rotation.y) * ease;
+      rig.torso.rotation.y = Math.sin(time * 1.3) * 0.035;
+      rig.torso.rotation.x = Math.sin(time * 1.7) * 0.012;
+      rig.head.rotation.y = Math.sin(time * 0.8) * 0.13;
+      rig.head.rotation.x = Math.sin(time * 1.1) * 0.025;
+      rig.leftArm.rotation.set(0, 0, 0);
+      rig.rightArm.rotation.set(0, 0, 0);
+      rig.rifle.rotation.set(-0.35, 0, 0);
+      rig.rifle.position.set(0.25, 1.35, 0.38);
+      if (!selected) return;
+      if (id === 'runner') {
+        rig.leftArm.rotation.x = -0.55 - selectPulse * 0.4;
+        rig.rightArm.rotation.x = -0.65 - selectPulse * 0.35;
+        rig.rifle.rotation.x = -0.15 - selectPulse * 0.2;
+        rig.rifle.position.y += selectPulse * 0.22;
+        rig.root.rotation.y -= 0.1 + selectPulse * 0.16;
+      } else if (id === 'scavenger') {
+        rig.rightArm.rotation.x = -1.65 * selectPulse;
+        rig.rightArm.rotation.z = 0.45 * selectPulse;
+        rig.head.rotation.y += 0.22 * selectPulse;
+      } else if (id === 'juggernaut') {
+        rig.leftArm.rotation.x = -0.5 * selectPulse;
+        rig.rightArm.rotation.x = -0.5 * selectPulse;
+        rig.rifle.rotation.z = -0.42 * selectPulse;
+        rig.rifle.position.y += 0.12 * selectPulse;
+        rig.torso.rotation.x -= 0.06 * selectPulse;
+      } else {
+        rig.leftArm.rotation.x = -1.45 * selectPulse;
+        rig.leftArm.rotation.z = -0.32 * selectPulse;
+        rig.head.rotation.y -= 0.18 * selectPulse;
+      }
     });
   }
 
@@ -865,9 +971,15 @@ export class Game {
   private update() {
     const dt = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
     if (this.state === 'menu') {
-      this.camera.position.set(6.2, 2.5, 13);
-      this.camera.setTarget(new Vector3(6.2, 1.35, 3));
-      for (const model of this.operatorModels.values()) model.rotation.y = Math.sin(performance.now() * 0.0005) * 0.12;
+      if (this.operatorInspection) {
+        const selected = this.operatorModels.get(this.perk)!;
+        this.camera.position.set(-0.35, 2.05, selected.root.position.z + 4.6);
+        this.camera.setTarget(new Vector3(0.7, selected.root.position.y + 1.35, selected.root.position.z));
+      } else {
+        this.camera.position.set(6.2, 2.35, 12);
+        this.camera.setTarget(new Vector3(6.2, 1.4, 3.5));
+      }
+      this.updateOperatorPreview(dt);
       this.gun.setEnabled(false);
       return;
     }

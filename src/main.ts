@@ -117,6 +117,20 @@ const game = new Game(engine, {
   },
 });
 
+function showWelcome() {
+  game.setOperatorInspection(false);
+  byId('preparation').classList.add('hidden');
+  byId('settings').classList.add('hidden');
+  byId('menu').classList.remove('hidden');
+}
+
+function showPreparation() {
+  game.setOperatorInspection(true);
+  byId('menu').classList.add('hidden');
+  byId('settings').classList.add('hidden');
+  byId('preparation').classList.remove('hidden');
+}
+
 function deploy() {
   game.setMode(byId<HTMLSelectElement>('mode-select').value as 'dungeon' | 'zombies');
   game.setPerk(byId<HTMLSelectElement>('perk-select').value as PerkId);
@@ -127,6 +141,8 @@ function deploy() {
     magazine: byId<HTMLInputElement>('magazine').checked,
   });
   byId('menu').classList.add('hidden');
+  byId('preparation').classList.add('hidden');
+  byId('settings').classList.add('hidden');
   byId('pause').classList.add('hidden');
   byId('result').classList.add('hidden');
   byId('hud').classList.remove('hidden');
@@ -143,6 +159,19 @@ byId('operator-select').addEventListener('click', (event) => {
   byId<HTMLSelectElement>('perk-select').value = perk;
   document.querySelectorAll('#operator-select button').forEach((entry) => entry.classList.toggle('selected', entry === button));
   game.setPerk(perk);
+  const profiles: Record<PerkId, { number: string; name: string; role: string; buff: string; animation: string }> = {
+    runner: { number: '01', name: 'RUNNER', role: 'RECONNAISSANCE / MOBILITY', buff: '+15% MOVEMENT SPEED', animation: 'WEAPON READY' },
+    scavenger: { number: '02', name: 'SCAVENGER', role: 'LOGISTICS / SUSTAINMENT', buff: '+50% RESERVE AMMUNITION', animation: 'EQUIPMENT CHECK' },
+    juggernaut: { number: '03', name: 'TANK', role: 'ASSAULT / HEAVY WEAPONS', buff: '125 HP · DUAL HEAVY WEAPONS', animation: 'HEAVY WEAPON SALUTE' },
+    medic: { number: '04', name: 'COMBAT MEDIC', role: 'SUPPORT / SQUAD RECOVERY', buff: '1.5s REVIVE · 75 HP RESTORED', animation: 'FIELD MEDIC SIGNAL' },
+  };
+  const profile = profiles[perk];
+  byId('operator-number').textContent = profile.number;
+  byId('operator-name').textContent = profile.name;
+  byId('operator-role').textContent = profile.role;
+  byId('operator-buff').textContent = profile.buff;
+  byId('operator-animation').textContent = profile.animation;
+  byId('operator-name').animate([{ opacity: 0, transform: 'translateX(12px)' }, { opacity: 1, transform: 'translateX(0)' }], { duration: 250 });
   const secondary = byId<HTMLSelectElement>('secondary-select');
   const selectedWeapon = secondary.value;
   secondary.replaceChildren(new Option('MP5 / SMG', 'smg'), new Option('M9 / PISTOL', 'pistol'));
@@ -162,20 +191,18 @@ for (const id of ['welcome-settings', 'pause-settings']) byId(id).addEventListen
 byId('close-settings').addEventListener('click', () => byId('settings').classList.add('hidden'));
 byId('mode-select').addEventListener('change', () => {
   const zombies = byId<HTMLSelectElement>('mode-select').value === 'zombies';
-  document.querySelector('.eyebrow span')!.textContent = zombies ? 'SURVIVAL PROTOCOL' : 'OPERATION 001';
+  document.querySelector('#preparation .eyebrow span')!.textContent = zombies ? 'SURVIVAL PROTOCOL' : 'OPERATION 001';
   document.querySelector('.setup-section small')!.textContent = zombies ? '01 · ZOMBIE SURVIVAL' : '01 · DUNGEON OPERATION';
-  document.querySelector('.brief')!.textContent = zombies ? 'Hold the vault. Resupply. Survive the outbreak.' : 'Descend. Clear the chamber. Survive.';
-  document.querySelector('.weapon-preview strong')!.textContent = zombies ? 'ENDLESS WAVES' : 'M4A1';
+  document.querySelector('#preparation .brief')!.textContent = zombies ? 'Hold the vault. Resupply. Survive the outbreak.' : 'Descend. Clear the chamber. Survive.';
+  byId('operator-role').textContent = zombies ? 'OUTBREAK RESPONSE / CONTAINMENT' : byId('operator-role').textContent;
 });
-byId('weapon-select').addEventListener('change', () => {
-  const weapon = byId<HTMLSelectElement>('weapon-select');
-  const label = weapon.selectedOptions[0].textContent?.split(' / ') ?? [];
-  document.querySelector('.weapon-preview strong')!.textContent = label[0] ?? 'M4A1';
-});
+
 byId('create-room').addEventListener('click', () => {
   byId<HTMLInputElement>('room-code').value = Math.random().toString(36).slice(2, 8).toUpperCase();
 });
-byId('deploy').addEventListener('click', deploy);
+byId('deploy').addEventListener('click', showPreparation);
+byId('back-to-welcome').addEventListener('click', showWelcome);
+byId('start-deployment').addEventListener('click', deploy);
 byId('restart').addEventListener('click', deploy);
 byId('restart-pause').addEventListener('click', deploy);
 function mainMenu() {
@@ -183,7 +210,7 @@ function mainMenu() {
   byId('pause').classList.add('hidden');
   byId('result').classList.add('hidden');
   byId('hud').classList.add('hidden');
-  byId('menu').classList.remove('hidden');
+  showWelcome();
 }
 byId('main-menu').addEventListener('click', mainMenu);
 byId('result-menu').addEventListener('click', mainMenu);
@@ -192,7 +219,18 @@ byId('resume').addEventListener('click', () => {
   game.resume();
 });
 window.addEventListener('keydown', (event) => {
-  if (event.code === 'Enter' && game.currentState === 'menu') deploy();
+  const settingsOpen = !byId('settings').classList.contains('hidden');
+  if (event.code === 'Escape' && settingsOpen) {
+    byId('settings').classList.add('hidden');
+    return;
+  }
+  if (game.currentState === 'menu' && !settingsOpen) {
+    if (event.code === 'Enter') {
+      if (!byId('menu').classList.contains('hidden')) showPreparation();
+      else deploy();
+    }
+    if (event.code === 'Escape' && !byId('preparation').classList.contains('hidden')) showWelcome();
+  }
   if (event.code === 'Escape' && game.currentState === 'paused') {
     byId('pause').classList.add('hidden');
     game.resume();

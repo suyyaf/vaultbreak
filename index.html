@@ -19,6 +19,27 @@
         <a class="brand" href="/"><span class="brand-mark">V</span> VAULTBREAK<span class="brand-tag">ALPHA</span></a>
         <div class="build">BUILD 0.1.0 <span class="online-dot"></span> SYSTEM READY</div>
       </header>
+      <div class="menu-content welcome-content">
+        <div class="eyebrow"><span>VAULTBREAK</span> / TACTICAL SURVIVAL</div>
+        <h1>ENTER THE<br /><span>VAULT</span></h1>
+        <p class="brief">Descend into the unknown. Build your operator. Survive together.</p>
+        <button id="deploy" class="deploy"><span>DEPLOY</span><kbd>ENTER</kbd></button>
+        <button id="welcome-settings" class="text-button">SETTINGS</button>
+      </div>
+      <aside class="mission-card">
+        <div class="card-label">WELCOME, OPERATIVE</div>
+        <div class="mission-line"><span>OPERATIONS</span><strong>DUNGEON / ZOMBIE SURVIVAL</strong></div>
+        <div class="mission-line"><span>SQUAD</span><strong>SOLO OR 2–4 PLAYER CO-OP</strong></div>
+        <div class="mission-line"><span>STATUS</span><strong class="accent">READY FOR DEPLOYMENT</strong></div>
+      </aside>
+      <footer class="menu-footer"><span>DESKTOP EXPERIENCE · HEADPHONES RECOMMENDED</span><span>2–4 PLAYER CO-OP ONLINE</span></footer>
+    </section>
+
+    <section id="preparation" class="menu-screen deployment-screen hidden">
+      <header class="topbar">
+        <span class="brand"><span class="brand-mark">V</span> VAULTBREAK<span class="brand-tag">DEPLOYMENT</span></span>
+        <div class="build"><span class="online-dot"></span> OPERATIVE CONFIGURATION</div>
+      </header>
       <div class="menu-content">
         <div class="eyebrow"><span>DEPLOYMENT TERMINAL</span> / CONFIGURE YOUR OPERATIVE</div>
         <h1>PREPARE FOR<br /><span>THE VAULT</span></h1>
@@ -34,8 +55,8 @@
           <label class="attachment"><input id="magazine" type="checkbox" /> EXT. MAG</label>
         </div>
         </div></div>
-        <div class="coop-row"><label>CO-OP ROOM <input id="room-code" maxlength="6" placeholder="OPTIONAL CODE" autocomplete="off" /></label><button id="create-room" type="button">CREATE CODE</button><button id="welcome-settings" type="button">SETTINGS</button></div>
-        <button id="deploy" class="deploy"><span>DEPLOY</span><kbd>ENTER</kbd></button>
+        <div class="setup-section"><small>04 · SQUAD</small><div class="coop-row"><label>CO-OP ROOM <input id="room-code" maxlength="6" placeholder="OPTIONAL CODE" autocomplete="off" /></label><button id="create-room" type="button">CREATE CODE</button></div></div>
+        <div class="deployment-actions"><button id="start-deployment" class="deploy"><span>START DEPLOYMENT</span><kbd>ENTER</kbd></button><button id="back-to-welcome" class="text-button">BACK TO WELCOME</button></div>
         <div class="controls">
           <div><kbd>W A S D</kbd><span>MOVE</span></div>
           <div><kbd>MOUSE</kbd><span>AIM / FIRE</span></div>
@@ -45,14 +66,15 @@
           <div><kbd>C</kbd><span>CROUCH / SLIDE</span></div>
         </div>
       </div>
-      <aside class="mission-card">
-        <div class="card-label">MISSION BRIEF</div>
-        <div class="mission-line"><span>LOCATION</span><strong>VAULT 07 / SUBLEVEL 3</strong></div>
-        <div class="mission-line"><span>OBJECTIVE</span><strong>ELIMINATE ALL HOSTILES</strong></div>
-        <div class="mission-line"><span>THREAT LEVEL</span><strong class="accent">MODERATE</strong></div>
-        <div class="weapon-preview"><span>STANDARD ISSUE</span><strong>M4A1</strong><small>AUTO RIFLE · 30 ROUNDS</small></div>
+      <aside class="operator-profile">
+        <div class="card-label">ACTIVE OPERATOR / <span id="operator-number">01</span></div>
+        <h2 id="operator-name">RUNNER</h2>
+        <p id="operator-role">RECONNAISSANCE / MOBILITY</p>
+        <div class="operator-buff"><span>SPECIALTY</span><strong id="operator-buff">+15% MOVEMENT SPEED</strong></div>
+        <div class="operator-buff"><span>SIGNATURE MOVE</span><strong id="operator-animation">WEAPON READY</strong></div>
+        <div class="operator-status"><i></i> COMBAT READY</div>
       </aside>
-      <footer class="menu-footer"><span>DESKTOP EXPERIENCE · HEADPHONES RECOMMENDED</span><span>2–4 PLAYER CO-OP ONLINE</span></footer>
+      <footer class="menu-footer"><span>SELECT AN OPERATOR TO INSPECT</span><span>LIVE 3D PREVIEW</span></footer>
     </section>
 
     <section id="hud" class="hud hidden">
