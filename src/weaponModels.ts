@@ -67,6 +67,25 @@ export function buildWeaponModel(scene: Scene, gun: TransformNode, weapon: Weapo
     box('M4 magazine floorplate', 0.135, 0.035, 0.2, 0, -0.145, 0, metal, magazine as unknown as TransformNode);
     box('M4 charging handle', 0.21, 0.035, 0.05, 0, 0.075, 0.27, dark);
     box('M4 front sight', 0.07, 0.105, 0.04, 0, 0.17, -0.77, dark);
+  } else if (weapon.id === 'ak') {
+    const wood = mat(scene, new Color3(0.32, 0.16, 0.065));
+    box('AK receiver', 0.17, 0.18, 0.57, 0, 0, -0.02, metal);
+    box('AK stamped cover', 0.15, 0.065, 0.55, 0, 0.115, -0.03, dark);
+    box('AK wooden handguard', 0.17, 0.18, 0.43, 0, 0.015, -0.53, wood);
+    for (const z of [-0.68, -0.38]) box('AK handguard band', 0.178, 0.19, 0.035, 0, 0.015, z, metal);
+    cylinder('AK barrel', 0.05, 0.49, 0, 0.025, -0.94);
+    cylinder('AK slant brake', 0.07, 0.12, 0, 0.025, -1.22, dark);
+    cylinder('AK gas tube', 0.052, 0.48, 0, 0.115, -0.54, dark);
+    box('AK front sight', 0.07, 0.15, 0.045, 0, 0.15, -1.04, dark);
+    box('AK rear sight', 0.09, 0.055, 0.08, 0, 0.17, -0.27, dark);
+    box('AK wooden stock', 0.15, 0.23, 0.58, 0, -0.055, 0.55, wood).rotation.x = 0.08;
+    box('AK butt plate', 0.16, 0.245, 0.04, 0, -0.08, 0.855, dark);
+    box('AK pistol grip', 0.11, 0.27, 0.135, 0, -0.23, 0.19, wood).rotation.x = -0.25;
+    magazine = box('AK curved magazine', 0.125, 0.38, 0.18, 0, -0.285, -0.085, dark);
+    magazine.rotation.x = -0.42;
+    box('AK magazine lower curve', 0.13, 0.15, 0.18, 0, -0.13, 0.07, dark, magazine as unknown as TransformNode).rotation.x = 0.4;
+    for (const y of [-0.12, 0, 0.12]) box('AK magazine rib', 0.132, 0.018, 0.185, 0, y, 0, metal, magazine as unknown as TransformNode);
+    muzzleZ = -1.3;
   } else if (weapon.id === 'smg') {
     box('MP5 receiver', 0.17, 0.18, 0.58, 0, 0, -0.02, metal);
     box('MP5 stamped top', 0.15, 0.04, 0.62, 0, 0.105, -0.03, dark);
@@ -121,6 +140,7 @@ export function buildWeaponModel(scene: Scene, gun: TransformNode, weapon: Weapo
   }
   if (loadout.grip && weapon.id === 'rifle') box('vertical foregrip', 0.095, 0.25, 0.105, 0, -0.16, -0.5, gripMat).rotation.x = -0.12;
   if (loadout.grip && weapon.id === 'smg') box('MP5 foregrip', 0.1, 0.19, 0.1, 0, -0.14, -0.45, gripMat).rotation.x = -0.12;
+  if (loadout.grip && weapon.id === 'ak') box('AK foregrip', 0.1, 0.22, 0.105, 0, -0.16, -0.52, gripMat).rotation.x = -0.12;
   if (loadout.magazine && magazine) magazine.scaling.y = 1.3;
   const muzzle = MeshBuilder.CreateCylinder('muzzle flash', { diameterTop: 0, diameterBottom: 0.19, height: 0.28, tessellation: 6 }, scene);
   muzzle.rotation.x = -Math.PI / 2;

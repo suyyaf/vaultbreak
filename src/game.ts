@@ -9,7 +9,7 @@ import { GameMode, ZombieKind, ZOMBIE_SPAWNS, zombieDamage, zombieHealth, zombie
 import { PerkId, PERKS } from './perks';
 import { buildWeaponModel } from './weaponModels';
 import { CombatAudio } from './audio';
-import { GrenadeState, GRENADE_CAPACITY, GRENADE_FUSE_MS, grenadeDamage } from './equipment';
+import { AcidProjectile, GrenadeState, GRENADE_CAPACITY, GRENADE_FUSE_MS, grenadeDamage, SPIT_SPEED } from './equipment';
 
 export type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
 export interface GameEvents {
@@ -117,6 +117,9 @@ export class Game {
   private perk: PerkId = 'runner';
   private pumpMesh?: TransformNode;
   private readonly teammateTargets = new Map<string, { position: Vector3; yaw: number }>();
+  private readonly acidProjectiles = new Map<number, AcidProjectile>();
+  private readonly acidMeshes = new Map<number, Mesh>();
+  private nextAcidId = 1;
 
   constructor(private readonly engine: Engine, private readonly events: GameEvents) {
     this.scene = new Scene(engine);
@@ -253,6 +256,15 @@ export class Game {
     for (const [key, mesh] of this.grenadeMeshes) {
       if (key.startsWith('server-') && !activeGrenades.has(key)) { mesh.dispose(); this.grenadeMeshes.delete(key); }
     }
+    const activeAcid = new Set<number>();
+    for (const acid of world.acid) {
+      activeAcid.add(acid.id);
+      const isNew = !this.acidMeshes.has(acid.id);
+      const mesh = this.acidMeshes.get(acid.id) ?? this.createAcidMesh(acid.id);
+      if (isNew) this.combatAudio?.spit();
+      mesh.position.set(acid.x, acid.y, acid.z);
+    }
+    for (const [id, mesh] of this.acidMeshes) if (!activeAcid.has(id)) { mesh.dispose(); this.acidMeshes.delete(id); }
     if (this.isCoop && this.mode === 'zombies') this.nextWaveAt += this.networkClockOffset;
     this.reviveTarget = world.players.find((player) => player.downed && player.id !== this.playerId && Math.hypot(player.x - this.camera.position.x, player.z - this.camera.position.z) < 2.8)?.id;
     for (const state of world.enemies) {
@@ -357,6 +369,9 @@ export class Game {
     this.events.onGrenades(this.grenades);
     this.nextGrenadeAt = 0;
     this.localGrenades.clear();
+    this.acidProjectiles.clear();
+    for (const mesh of this.acidMeshes.values()) mesh.dispose();
+    this.acidMeshes.clear();
     for (const mesh of this.grenadeMeshes.values()) mesh.dispose();
     this.grenadeMeshes.clear();
     this.kills = 0;
@@ -669,13 +684,15 @@ export class Game {
     const eye = this.material(new Color3(0.85, 0.65, 0.15), 1.2);
     const runnerSkin = this.material(new Color3(0.48, 0.3, 0.2));
     const bruteSkin = this.material(new Color3(0.24, 0.34, 0.27));
+    const spitterSkin = this.material(new Color3(0.22, 0.48, 0.18));
+    const acidMat = this.material(new Color3(0.65, 1, 0.12), 1.6);
     for (const spawn of ZOMBIE_SPAWNS) {
       const index = this.enemies.length;
       const root = new TransformNode(`infected ${spawn.id + 1}`, this.scene);
       root.position.set(spawn.x, 0, spawn.z);
       const kind = zombieKind(spawn.id, 1);
       root.metadata = { spawn: root.position.clone(), stage: 0, boss: false, zombie: true, kind };
-      const skinMat = kind === 'runner' ? runnerSkin : kind === 'brute' ? bruteSkin : skin;
+      const skinMat = kind === 'runner' ? runnerSkin : kind === 'brute' ? bruteSkin : kind === 'spitter' ? spitterSkin : skin;
       const scale = kind === 'brute' ? 1.35 : kind === 'runner' ? 0.88 : 1;
       root.scaling.set(scale, kind === 'brute' ? 1.2 : 1, scale);
       const make = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, mat: StandardMaterial) => {
@@ -689,7 +706,11 @@ export class Game {
       const body = make('infected torso', 0.68, 0.8, 0.38, 0, 1.3, 0, cloth);
       body.rotation.x = 0.2;
       const head = make('infected head', 0.42, 0.43, 0.4, 0, 1.91, 0.12, skinMat);
-      make('infected eyes', 0.29, 0.05, 0.025, 0, 1.96, 0.33, eye);
+      make('infected eyes', 0.29, 0.05, 0.025, 0, 1.96, 0.33, kind === 'spitter' ? acidMat : eye);
+      if (kind === 'spitter') {
+        make('spitter acid sac', 0.46, 0.36, 0.12, 0, 1.42, 0.24, acidMat);
+        make('spitter jaw', 0.28, 0.16, 0.2, 0, 1.75, 0.25, spitterSkin);
+      }
       const limbs = [
         make('infected left leg', 0.23, 0.8, 0.25, -0.2, 0.44, 0, cloth),
         make('infected right leg', 0.23, 0.8, 0.25, 0.2, 0.44, 0, cloth),
@@ -723,6 +744,10 @@ export class Game {
     enemy.body.material = this.material(new Color3(kind === 'brute' ? 0.24 : kind === 'runner' ? 0.32 : 0.19, kind === 'runner' ? 0.16 : 0.22, 0.17));
     enemy.head.material = this.material(new Color3(kind === 'runner' ? 0.48 : kind === 'brute' ? 0.24 : 0.34, kind === 'runner' ? 0.3 : kind === 'brute' ? 0.34 : 0.43, kind === 'runner' ? 0.2 : kind === 'brute' ? 0.27 : 0.25));
     for (const limb of enemy.limbs.slice(2)) limb.material = enemy.head.material;
+    for (const mesh of enemy.root.getChildMeshes()) {
+      if (mesh.name === 'spitter acid sac' || mesh.name === 'spitter jaw') mesh.setEnabled(kind === 'spitter');
+      if (mesh.name === 'infected eyes' && kind === 'spitter') mesh.material = this.material(new Color3(0.65, 1, 0.12), 1.6);
+    }
   }
 
   private update() {
@@ -740,6 +765,7 @@ export class Game {
     this.interpolateNetwork(dt);
     this.animateEnemies(dt);
     this.updateGrenades(dt);
+    this.updateAcid(dt);
     if (this.mode === 'zombies') {
       if (this.waveBreak) {
         const seconds = Math.max(0, Math.ceil((this.nextWaveAt - Date.now()) / 1000));
@@ -801,7 +827,7 @@ export class Game {
       enemy.hitAt = Math.max(0, enemy.hitAt - dt * 1000);
       enemy.root.rotation.z += ((enemy.hitAt > 0 ? 0.1 : 0) - enemy.root.rotation.z) * Math.min(1, dt * 18);
       const windup = enemy.windupUntil > now;
-      enemy.telegraph?.setEnabled(windup && (meta.kind === 'brute' || meta.boss === true));
+      enemy.telegraph?.setEnabled(windup && (meta.kind === 'brute' || meta.kind === 'spitter' || meta.boss === true));
       if (enemy.telegraph?.isEnabled()) enemy.telegraph.scaling.setAll(0.85 + Math.sin(now * 0.02) * 0.15);
       enemy.body.rotation.z = windup ? Math.sin(now * 0.025) * 0.09 : enemy.hitAt > 0 ? Math.sin(enemy.hitAt * 0.04) * 0.13 : 0;
       if (windup && meta.zombie) enemy.limbs.slice(2).forEach((limb) => { limb.rotation.x = -0.55; });
@@ -918,7 +944,7 @@ export class Game {
     this.ammo--;
     this.shots++;
     this.recoil = Math.min(0.09, this.recoil + (this.weapon.id === 'shotgun' ? 0.065 : 0.035));
-    this.weaponKick = this.weapon.id === 'shotgun' ? 0.14 : this.weapon.id === 'pistol' ? 0.09 : this.weapon.id === 'smg' ? 0.04 : 0.055;
+    this.weaponKick = this.weapon.id === 'shotgun' ? 0.14 : this.weapon.id === 'ak' ? 0.08 : this.weapon.id === 'pistol' ? 0.09 : this.weapon.id === 'smg' ? 0.04 : 0.055;
     this.camera.rotation.x -= this.weapon.recoil * (this.aiming ? 0.5 : 1);
     this.camera.rotation.y += (Math.random() - 0.5) * this.weapon.recoil;
     this.events.onAmmo(this.ammo, this.reserve);
@@ -1131,6 +1157,41 @@ export class Game {
     setTimeout(() => spark.dispose(), 70);
   }
 
+  private createAcidMesh(id: number) {
+    const mesh = MeshBuilder.CreateSphere('acid projectile', { diameter: 0.24, segments: 5 }, this.scene);
+    mesh.material = this.material(new Color3(0.55, 1, 0.08), 2);
+    mesh.isPickable = false;
+    mesh.checkCollisions = false;
+    this.acidMeshes.set(id, mesh);
+    return mesh;
+  }
+
+  private launchAcid(enemy: Enemy, target: Vector3) {
+    const start = enemy.root.position.add(new Vector3(0, 1.65, 0));
+    const velocity = target.subtract(start).normalize().scale(SPIT_SPEED);
+    const projectile: AcidProjectile = { id: this.nextAcidId++, x: start.x, y: start.y, z: start.z, vx: velocity.x, vy: velocity.y, vz: velocity.z, expiresAt: performance.now() + 2600 };
+    this.acidProjectiles.set(projectile.id, projectile);
+    this.createAcidMesh(projectile.id).position.set(start.x, start.y, start.z);
+    this.combatAudio?.spit();
+  }
+
+  private updateAcid(dt: number) {
+    if (this.isCoop) return;
+    for (const [id, acid] of this.acidProjectiles) {
+      const next = new Vector3(acid.x + acid.vx * dt, acid.y + acid.vy * dt, acid.z + acid.vz * dt);
+      const hitPlayer = Vector3.DistanceSquared(next, this.camera.position) < 0.45;
+      const blocked = this.blocked(next);
+      if (hitPlayer && !blocked) this.takeDamage(zombieDamage('spitter'));
+      this.acidMeshes.get(id)?.position.copyFrom(next);
+      Object.assign(acid, { x: next.x, y: next.y, z: next.z });
+      if (hitPlayer || blocked || performance.now() >= acid.expiresAt) {
+        this.acidProjectiles.delete(id);
+        this.acidMeshes.get(id)?.dispose();
+        this.acidMeshes.delete(id);
+      }
+    }
+  }
+
   private updateEnemies(dt: number) {
     const now = performance.now();
     for (const enemy of this.enemies) {
@@ -1144,7 +1205,9 @@ export class Game {
       if (active && distance < 36) {
         toPlayer.normalize();
         enemy.root.rotation.y = Math.atan2(toPlayer.x, toPlayer.z);
-        if (distance > (meta.zombie ? 1.65 : 5)) {
+        const spitter = meta.kind === 'spitter';
+        const attackDistance = spitter ? 7 : meta.zombie ? 1.65 : 5;
+        if (distance > attackDistance) {
           const step = toPlayer.scale(dt * (meta.zombie ? zombieSpeed(this.wave, meta.kind ?? 'walker') : 1.25));
           let separationX = 0;
           let separationZ = 0;
@@ -1173,10 +1236,11 @@ export class Game {
         const heavy = meta.boss || meta.kind === 'brute';
         if (enemy.windupUntil && now >= enemy.windupUntil) {
           enemy.windupUntil = 0;
-          if (distance < (meta.zombie ? 2.4 : 14) && this.hasLineOfSight(enemy)) this.takeDamage(meta.boss ? 24 : meta.zombie ? zombieDamage(meta.kind ?? 'walker') : distance < 6 ? 12 : 7);
-        } else if (!enemy.windupUntil && distance < (meta.zombie ? 1.9 : 13) && now >= enemy.attackAt && this.hasLineOfSight(enemy)) {
-          enemy.attackAt = now + (meta.zombie ? 900 : 1100 + Math.random() * 700);
-          enemy.windupUntil = now + (heavy ? 850 : 350);
+          if (spitter) this.launchAcid(enemy, this.camera.position.clone());
+          else if (distance < (meta.zombie ? 2.4 : 14) && this.hasLineOfSight(enemy)) this.takeDamage(meta.boss ? 24 : meta.zombie ? zombieDamage(meta.kind ?? 'walker') : distance < 6 ? 12 : 7);
+        } else if (!enemy.windupUntil && distance < (spitter ? 18 : meta.zombie ? 1.9 : 13) && now >= enemy.attackAt && this.hasLineOfSight(enemy)) {
+          enemy.attackAt = now + (spitter ? 2300 : meta.zombie ? 900 : 1100 + Math.random() * 700);
+          enemy.windupUntil = now + (spitter ? 700 : heavy ? 850 : 350);
         }
       }
     }

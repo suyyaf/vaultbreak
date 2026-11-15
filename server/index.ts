@@ -4,7 +4,7 @@ import { EnemyState, PlayerState, WorldState } from '../src/network';
 import { COVER, ENEMY_SPAWNS, GATE_Z, SUPPLIES } from '../src/dungeon';
 import { GameMode, ZOMBIE_SPAWNS, zombieDamage, zombieHealth, zombieKind, zombieSpeed, zombieWaveSize } from '../src/modes';
 import { PerkId, PERKS } from '../src/perks';
-import { GrenadeState, GRENADE_CAPACITY, grenadeDamage } from '../src/equipment';
+import { AcidProjectile, GrenadeState, GRENADE_CAPACITY, grenadeDamage, SPIT_SPEED } from '../src/equipment';
 
 interface Client {
   ws: WebSocket;
@@ -34,7 +34,9 @@ class Room {
   wave = 1;
   nextWaveAt = 0;
   grenades: GrenadeState[] = [];
+  acid: AcidProjectile[] = [];
   nextGrenadeId = 1;
+  nextAcidId = 1;
   timer?: NodeJS.Timeout;
 
   constructor(readonly code: string, mode: GameMode = 'dungeon') { this.mode = mode; this.reset(); }
@@ -43,6 +45,7 @@ class Room {
     this.wave = 1;
     this.nextWaveAt = 0;
     this.grenades = [];
+    this.acid = [];
     this.enemies = this.mode === 'zombies'
       ? ZOMBIE_SPAWNS.map((spawn, id) => ({ id, x: spawn.x, z: spawn.z, yaw: 0, health: zombieHealth(1, zombieKind(id, 1)), alive: id < zombieWaveSize(1), stage: 0, boss: false, zombie: true, kind: zombieKind(id, 1), windupUntil: 0 }))
       : ENEMY_SPAWNS.map((spawn, id) => ({ id, x: spawn.x, z: spawn.z, yaw: 0, health: spawn.boss ? 800 : 100, alive: true, stage: spawn.stage, boss: spawn.boss, zombie: false, kind: 'soldier' as const, windupUntil: 0 }));
@@ -151,7 +154,7 @@ class Room {
       }
     }
     if (data.type === 'loadout' && data.weapon && data.loadout) {
-      client.weapon = data.weapon === 'pistol' || data.weapon === 'shotgun' || data.weapon === 'smg' ? data.weapon : 'rifle';
+      client.weapon = data.weapon === 'pistol' || data.weapon === 'shotgun' || data.weapon === 'smg' || data.weapon === 'ak' ? data.weapon : 'rifle';
       const perk = String(data.perk ?? '') as PerkId;
       if (PERKS[perk]) client.perk = perk;
       const value = data.loadout as Loadout;
@@ -178,6 +181,7 @@ class Room {
         for (const player of this.clients) this.send(player, { type: 'notice', message: `WAVE ${this.wave} INCOMING` });
       }
       this.updateGrenades();
+      this.updateAcid();
       const players = Array.from(this.clients);
       for (const client of players) {
         if (!client.player.downed) continue;
@@ -208,7 +212,8 @@ class Room {
         const dz = target.player.z - enemy.z;
         const distance = Math.hypot(dx, dz);
         enemy.yaw = Math.atan2(dx, dz);
-        const attackDistance = enemy.zombie ? 1.65 : 5;
+        const spitter = enemy.kind === 'spitter';
+        const attackDistance = spitter ? 7 : enemy.zombie ? 1.65 : 5;
         if (distance > attackDistance) {
           const speed = (enemy.zombie ? zombieSpeed(this.wave, enemy.kind as 'walker' | 'runner' | 'brute') : 1.25) * 0.05;
           let nx = enemy.x + dx / distance * speed;
@@ -228,13 +233,19 @@ class Room {
             }
           }
         }
-        if (distance < (enemy.zombie ? 1.9 : 18)) {
+        if (distance < (spitter ? 18 : enemy.zombie ? 1.9 : 18)) {
           const lastAttack = (enemy as EnemyState & { attackAt?: number }).attackAt ?? 0;
           const heavy = enemy.boss || enemy.kind === 'brute';
           if (enemy.windupUntil && Date.now() >= enemy.windupUntil) {
             enemy.windupUntil = 0;
             const currentDistance = this.distance(enemy, target.player);
-            if (currentDistance < (enemy.zombie ? 2.4 : 20) && this.lineOfSight(enemy, target.player)) {
+            if (spitter) {
+              const dx = target.player.x - enemy.x;
+              const dy = target.player.y - 1.65;
+              const dz = target.player.z - enemy.z;
+              const length = Math.hypot(dx, dy, dz) || 1;
+              this.acid.push({ id: this.nextAcidId++, x: enemy.x, y: 1.65, z: enemy.z, vx: dx / length * SPIT_SPEED, vy: dy / length * SPIT_SPEED, vz: dz / length * SPIT_SPEED, expiresAt: Date.now() + 2600 });
+            } else if (currentDistance < (enemy.zombie ? 2.4 : 20) && this.lineOfSight(enemy, target.player)) {
               target.health = Math.max(0, target.health - (enemy.boss ? 24 : enemy.zombie ? zombieDamage(enemy.kind as 'walker' | 'runner' | 'brute') : currentDistance < 6 ? 10 : 5));
               if (target.health === 0 && !target.player.downed && this.clients.size > 1) {
                 target.player.downed = true;
@@ -245,8 +256,8 @@ class Room {
               this.send(target, { type: 'damaged', health: target.health });
             }
           } else if (!enemy.windupUntil && Date.now() >= lastAttack && this.lineOfSight(enemy, target.player)) {
-            (enemy as EnemyState & { attackAt?: number }).attackAt = Date.now() + (enemy.zombie ? 900 : 1100 + Math.random() * 700);
-            enemy.windupUntil = Date.now() + (heavy ? 850 : 350);
+            (enemy as EnemyState & { attackAt?: number }).attackAt = Date.now() + (spitter ? 2300 : enemy.zombie ? 900 : 1100 + Math.random() * 700);
+            enemy.windupUntil = Date.now() + (spitter ? 700 : heavy ? 850 : 350);
           }
         }
       }
@@ -265,10 +276,36 @@ class Room {
       wave: this.wave,
       nextWaveAt: this.nextWaveAt,
       grenades: this.grenades,
+      acid: this.acid,
     };
     for (const client of this.clients) {
       client.player.health = client.health;
       this.send(client, { type: 'state', state });
+    }
+  }
+
+  damageClient(client: Client, amount: number) {
+    if (client.health <= 0 || client.player.downed || this.ended) return;
+    client.health = Math.max(0, client.health - amount);
+    if (client.health === 0 && this.clients.size > 1) {
+      client.player.downed = true;
+      client.downedAt = Date.now();
+      client.reviverId = '';
+      client.reviveStartedAt = 0;
+    }
+    this.send(client, { type: 'damaged', health: client.health });
+  }
+
+  updateAcid() {
+    for (let i = this.acid.length - 1; i >= 0; i--) {
+      const acid = this.acid[i];
+      acid.x += acid.vx * 0.05;
+      acid.y += acid.vy * 0.05;
+      acid.z += acid.vz * 0.05;
+      const blocked = this.blocked(acid.x, acid.z);
+      const target = blocked ? undefined : Array.from(this.clients).find((client) => !client.player.downed && client.health > 0 && Math.hypot(client.player.x - acid.x, client.player.y - acid.y, client.player.z - acid.z) < 0.7);
+      if (target) this.damageClient(target, zombieDamage('spitter'));
+      if (blocked || target || Date.now() >= acid.expiresAt) this.acid.splice(i, 1);
     }
   }
 

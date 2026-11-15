@@ -10,8 +10,9 @@ export class CombatAudio {
     const shotgun = id === 'shotgun';
     const pistol = id === 'pistol';
     const smg = id === 'smg';
-    this.noiseBurst(now, shotgun ? 0.22 : pistol ? 0.09 : 0.075, shotgun ? 0.34 : smg ? 0.16 : 0.2, shotgun ? 900 : pistol ? 1800 : smg ? 2200 : 1400);
-    this.tone(now, shotgun ? 105 : pistol ? 180 : smg ? 190 : 145, shotgun ? 38 : 55, shotgun ? 0.2 : 0.085, shotgun ? 0.24 : smg ? 0.09 : 0.12, 'square');
+    const ak = id === 'ak';
+    this.noiseBurst(now, shotgun ? 0.22 : ak ? 0.12 : pistol ? 0.09 : 0.075, shotgun ? 0.34 : ak ? 0.26 : smg ? 0.16 : 0.2, shotgun ? 900 : ak ? 1000 : pistol ? 1800 : smg ? 2200 : 1400);
+    this.tone(now, shotgun ? 105 : ak ? 125 : pistol ? 180 : smg ? 190 : 145, shotgun ? 38 : 55, shotgun ? 0.2 : ak ? 0.12 : 0.085, shotgun ? 0.24 : ak ? 0.17 : smg ? 0.09 : 0.12, 'square');
     if (shotgun) this.noiseBurst(now + 0.045, 0.18, 0.1, 450);
   }
 
@@ -30,6 +31,11 @@ export class CombatAudio {
   pickup() { this.tone(this.context.currentTime, 540, 880, 0.13, 0.045, 'sine'); }
   empty() { this.tone(this.context.currentTime, 190, 120, 0.035, 0.035, 'square'); }
   throwGrenade() { this.noiseBurst(this.context.currentTime, 0.08, 0.045, 1200); }
+  spit() {
+    const now = this.context.currentTime;
+    this.noiseBurst(now, 0.16, 0.06, 900);
+    this.tone(now, 170, 70, 0.16, 0.045, 'sawtooth');
+  }
   explosion() {
     const now = this.context.currentTime;
     this.noiseBurst(now, 0.65, 0.45, 700);

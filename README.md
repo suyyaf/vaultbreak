@@ -30,11 +30,11 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 ## Modes
 
 - **Dungeon Operation:** clear three connected chambers and defeat the Warden.
-- **Zombie Survival:** fight endless escalating waves of melee infected. Each cleared wave starts a seven-second resupply break; health and ammo crates return near the first gate. Survive as long as possible solo or with your squad.
+- **Zombie Survival:** fight endless escalating waves of infected. Walkers, runners, and heavy brutes are joined from wave two by Spitters, which telegraph and launch dodgeable acid projectiles blocked by cover. Each cleared wave starts a seven-second resupply break; health and ammo crates return near the first gate. Survive as long as possible solo or with your squad.
 
 ## Development roadmap
 
-1. **Current — playable systems and visual pass:** dungeon, co-op, zombie survival, three distinct weapon models, tactical perks, infected variants, character movement, hit reactions, and boss attack telegraphs.
+1. **Current — playable systems and visual pass:** dungeon, co-op, zombie survival, five distinct weapon models, tactical perks, infected variants, character movement, hit reactions, and boss attack telegraphs.
 2. **Current — combat polish:** weapon-specific synthesized audio, smoother handling, responsive crosshair and hit feedback, and separated enemy hordes. Co-op tracks individual eliminations and resets downed players correctly.
 3. **Next — balance and content:** weapon feel, enemy pacing, wave difficulty, UI, and performance based on complete solo/co-op playtests, followed by unlocks and new objectives.
 4. **Later — expansion:** more weapons, maps, and objectives.
@@ -42,6 +42,7 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 ## Arsenal and perks
 
 - **M4A1:** automatic rifle, 30 rounds, controllable recoil.
+- **AK-47:** harder-hitting automatic rifle, 30 rounds, heavier recoil, slower fire and reload, distinct wood furniture and curved magazine.
 - **MP5:** fast-firing SMG, 30 rounds, low recoil, 150-round reserve.
 - **M9:** semi-automatic pistol, 15 rounds, high single-shot damage.
 - **M870:** pump-action shotgun, six shells, eight simulated pellets, range falloff, animated pump.
@@ -52,7 +53,7 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 
 Co-op includes a squad HUD with each player's health, downed state, and individual eliminations. Grenades are server-authoritative in co-op, including damage and elimination credit; collecting ammunition resupplies both carried grenades.
 
-Zombie waves introduce fast, fragile runners and slow, durable brutes from wave two. Heavy infected and the Warden display an attack wind-up before dealing damage.
+Zombie waves introduce fast, fragile runners, slow durable brutes, and ranged Spitters from wave two. Heavy infected and the Warden display an attack wind-up; Spitters use a glowing ground warning before launching acid. Co-op acid movement, collisions, cover blocking, and damage are server-authoritative.
 
 Models remain intentionally low-poly; fine-tuning means better shape, readability, animation, and feedback rather than unnecessary detail.
 

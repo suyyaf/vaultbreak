@@ -1,5 +1,5 @@
 import { GameMode, ZombieKind } from './modes';
-import { GrenadeState } from './equipment';
+import { AcidProjectile, GrenadeState } from './equipment';
 
 export interface EnemyState {
   id: number;
@@ -40,6 +40,7 @@ export interface WorldState {
   wave: number;
   nextWaveAt: number;
   grenades: GrenadeState[];
+  acid: AcidProjectile[];
 }
 
 export type ServerMessage =
