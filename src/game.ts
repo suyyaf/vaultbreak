@@ -1,6 +1,6 @@
 import {
   Color3, Color4, DirectionalLight, Engine, GlowLayer, HemisphericLight,
-  Mesh, MeshBuilder, Ray, Scene, StandardMaterial, TransformNode, UniversalCamera, Vector2, Vector3
+  Mesh, MeshBuilder, Ray, Scene, SceneInstrumentation, StandardMaterial, TransformNode, UniversalCamera, Vector2, Vector3
 } from '@babylonjs/core';
 import { getWeapon, Loadout, WeaponId, WeaponSpec, WEAPONS } from './weapons';
 import { ServerMessage, WorldState } from './network';
@@ -9,6 +9,7 @@ import { GameMode, ZombieKind, ZOMBIE_SPAWNS, zombieDamage, zombieHealth, zombie
 import { PerkId, PERKS } from './perks';
 import { buildWeaponModel } from './weaponModels';
 import { CombatAudio } from './audio';
+import { CharacterAsset, CharacterKind, characterClip, loadCharacter, preloadCharacters } from './assets';
 import { AcidProjectile, GrenadeState, GRENADE_CAPACITY, GRENADE_FUSE_MS, grenadeDamage, SPIT_SPEED } from './equipment';
 
 export type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
@@ -44,6 +45,7 @@ interface OperatorRig {
   leftArm: TransformNode;
   rightArm: TransformNode;
   rifle: TransformNode;
+  asset?: CharacterAsset;
 }
 
 interface Enemy {
@@ -58,6 +60,11 @@ interface Enemy {
   phase: number;
   hitAt: number;
   windupUntil: number;
+  asset?: CharacterAsset;
+  assetKind?: CharacterKind;
+  assetVersion: number;
+  deadAt: number;
+  proceduralMeshes?: import('@babylonjs/core').AbstractMesh[];
   weapon?: TransformNode;
   muzzleFlash?: Mesh;
   telegraph?: Mesh;
@@ -135,6 +142,8 @@ export class Game {
   private readonly operatorModels = new Map<PerkId, OperatorRig>();
   private operatorSelectedAt = 0;
   private operatorInspection = false;
+  private performanceUiAt = 0;
+  private readonly sceneInstrumentation: SceneInstrumentation;
   private readonly touchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
   private mobileMove = Vector2.Zero();
   private mobileSprint = false;
@@ -172,9 +181,14 @@ export class Game {
     this.camera.checkCollisions = true;
     this.camera.applyGravity = true;
     this.camera.ellipsoid = new Vector3(0.38, 0.85, 0.38);
+    if (location.hash === '#debug') (window as unknown as { game: Game }).game = this;
     this.camera.ellipsoidOffset = new Vector3(0, 0.85, 0);
     this.scene.activeCamera = this.camera;
 
+    this.engine.setHardwareScalingLevel(this.touchDevice ? 1.25 : 1);
+    this.scene.performancePriority = 2;
+    this.sceneInstrumentation = new SceneInstrumentation(this.scene);
+    this.scene.autoClearDepthAndStencil = true;
     this.buildDungeon();
     this.buildGun();
     this.spawnEnemies();
@@ -183,7 +197,7 @@ export class Game {
     this.operatorStage = new TransformNode('operator inspection stage', this.scene);
     this.operatorStage.position.set(0, 0, 200);
     this.operatorStageLight = new HemisphericLight('operator inspection fill', new Vector3(0.2, 1, 0.6), this.scene);
-    this.operatorStageLight.intensity = 1.5;
+    this.operatorStageLight.intensity = 1.05;
     this.operatorStageLight.setEnabled(false);
     const backdrop = MeshBuilder.CreateBox('operator stage backdrop', { width: 24, height: 12, depth: 0.3 }, this.scene);
     backdrop.parent = this.operatorStage; backdrop.position.set(0, 4, -3); backdrop.material = this.material(new Color3(0.025, 0.035, 0.028)); backdrop.isPickable = false;
@@ -192,8 +206,10 @@ export class Game {
     this.operatorStage.setEnabled(false);
     this.buildOperatorPreview();
     this.bindInput();
+    void preloadCharacters(this.scene).then(() => this.upgradeCharacters());
     if (this.touchDevice) this.bindMobileInput();
     this.scene.onBeforeRenderObservable.add(() => this.update());
+    this.scene.onAfterRenderObservable.add(() => this.updatePerformanceReadout());
   }
 
   get currentState() { return this.state; }
@@ -372,9 +388,13 @@ export class Game {
       this.enemyTargets.set(state.id, { position: new Vector3(state.x, 0, state.z), yaw: state.yaw });
       if (state.health < enemy.health) enemy.hitAt = 150;
       enemy.health = state.health;
+      if (enemy.alive && !state.alive) {
+        enemy.deadAt = performance.now();
+        enemy.asset?.play('Death', false);
+      } else if (state.alive) enemy.deadAt = 0;
       enemy.alive = state.alive;
       enemy.windupUntil = state.windupUntil ? this.networkClock(state.windupUntil) : 0;
-      enemy.root.setEnabled(state.alive);
+      enemy.root.setEnabled(state.alive || (!!enemy.asset && enemy.deadAt > 0 && performance.now() - enemy.deadAt < 4000));
       if (state.boss) this.events.onBoss(state.health, 800);
     }
     this.kills = me?.kills ?? 0;
@@ -529,7 +549,10 @@ export class Game {
       enemy.health = meta.boss ? 800 : meta.zombie ? zombieHealth(1, meta.kind) : 100;
       enemy.root.rotation.set(0, 0, 0);
       enemy.hitAt = 0;
+      enemy.deadAt = 0;
       enemy.root.setEnabled(enemy.alive);
+      enemy.asset?.animations.forEach((animation) => animation.stop());
+      if (enemy.alive) enemy.asset?.play('Idle');
       enemy.attackAt = performance.now() + 1500;
       enemy.root.position.copyFrom((enemy.root.metadata as { spawn: Vector3 }).spawn);
     }
@@ -699,7 +722,7 @@ export class Game {
     const sun = new DirectionalLight('light', new Vector3(-0.25, -1, 0.3), this.scene);
     sun.position = new Vector3(3, 12, -4);
     sun.intensity = 1.15;
-    new GlowLayer('glow', this.scene).intensity = 0.35;
+    if (!this.touchDevice) new GlowLayer('glow', this.scene).intensity = 0.25;
 
     const floor = this.material(new Color3(0.16, 0.18, 0.16));
     const wall = this.material(new Color3(0.22, 0.25, 0.22));
@@ -790,7 +813,7 @@ export class Game {
       const root = new TransformNode(`operator preview ${id}`, this.scene);
       root.position.set(3.2 + index * 2.1, 0.15, 3);
       root.metadata = { previewLight: new HemisphericLight('operator fill', new Vector3(0, 1, 0.4), this.scene) };
-      root.metadata.previewLight.intensity = 1.4;
+      root.metadata.previewLight.intensity = 0.85;
       const armor = this.material(colors[index], 0.28);
       const dark = this.material(new Color3(0.08, 0.1, 0.09));
       const accent = this.material(new Color3(0.75, 0.9, 0.4), 0.8);
@@ -833,6 +856,45 @@ export class Game {
     });
   }
 
+  private async upgradeCharacters() {
+    const operatorJobs = [...this.operatorModels].map(async ([id, rig]) => {
+      const asset = await loadCharacter(this.scene, id, rig.root);
+      asset.root.position.z = -0.3;
+      rig.asset = asset;
+      for (const mesh of rig.root.getChildMeshes()) {
+        if (!mesh.name.startsWith(`${id}:`)) mesh.setEnabled(false);
+      }
+      for (const node of [rig.torso, rig.head, rig.leftArm, rig.rightArm, rig.rifle]) node.setEnabled(false);
+    });
+    const enemyJobs = this.enemies.map((enemy) => this.upgradeEnemy(enemy));
+    const results = await Promise.allSettled([...operatorJobs, ...enemyJobs]);
+    if (results.some((result) => result.status === 'rejected')) console.warn('Some enhanced character assets could not be loaded; procedural fallbacks remain active.');
+  }
+
+  private enemyKind(enemy: Enemy): CharacterKind {
+    const meta = enemy.root.metadata as { zombie?: boolean; kind?: ZombieKind };
+    return meta.zombie ? meta.kind === 'runner' ? 'infectedRunner' : meta.kind ?? 'walker' : 'hostile';
+  }
+
+  private async upgradeEnemy(enemy: Enemy) {
+    const kind = this.enemyKind(enemy);
+    const version = ++enemy.assetVersion;
+    const asset = await loadCharacter(this.scene, kind, enemy.root);
+    if (version !== enemy.assetVersion) { asset.dispose(); return; }
+    enemy.asset?.dispose();
+    enemy.asset = asset;
+    enemy.assetKind = kind;
+    enemy.proceduralMeshes = enemy.root.getChildMeshes().filter((mesh) => !mesh.name.startsWith(`${kind}:`) && mesh.metadata?.enemyIndex !== enemy.id && mesh !== enemy.telegraph && mesh !== enemy.muzzleFlash);
+    for (const mesh of enemy.proceduralMeshes) {
+      // Invisible meshes still participate in picking; disabled meshes do not.
+      mesh.isVisible = false;
+    }
+    enemy.weapon?.setEnabled(false);
+    enemy.asset.root.setEnabled(enemy.alive || enemy.deadAt > 0);
+    if (enemy.alive) asset.play('Idle');
+    else if (enemy.deadAt > 0) asset.play('Death', false);
+  }
+
   private updateOperatorPreview(dt: number) {
     const now = performance.now();
     const ids: PerkId[] = ['runner', 'scavenger', 'juggernaut', 'medic'];
@@ -851,6 +913,10 @@ export class Game {
       rig.root.position.y = 0.15 + Math.sin(time * 1.7) * 0.012;
       rig.root.scaling.setAll(rig.root.scaling.x + ((selected ? this.operatorInspection ? 1.65 : 1.42 : 0.82) - rig.root.scaling.x) * ease);
       rig.root.rotation.y += ((selected ? -0.22 : 0.12) - rig.root.rotation.y) * ease;
+      if (rig.asset) {
+        rig.asset.play(selected ? id === 'juggernaut' ? 'Shoot_OneHanded' : id === 'scavenger' ? 'PickUp' : id === 'medic' ? 'Victory' : 'Idle' : 'Idle');
+        return;
+      }
       rig.torso.rotation.y = Math.sin(time * 1.3) * 0.035;
       rig.torso.rotation.x = Math.sin(time * 1.7) * 0.012;
       rig.head.rotation.y = Math.sin(time * 0.8) * 0.13;
@@ -984,7 +1050,7 @@ export class Game {
         telegraph.isPickable = false;
         telegraph.setEnabled(false);
       }
-      this.enemies.push({ id: index, root, body, head, limbs, health: 100, alive: true, attackAt: 0, phase: index, hitAt: 0, windupUntil: 0, weapon, muzzleFlash, telegraph });
+      this.enemies.push({ id: index, root, body, head, limbs, health: 100, alive: true, attackAt: 0, phase: index, hitAt: 0, windupUntil: 0, assetVersion: 0, deadAt: 0, weapon, muzzleFlash, telegraph });
     });
   }
 
@@ -1064,7 +1130,7 @@ export class Game {
       telegraph.isPickable = false;
       telegraph.checkCollisions = false;
       telegraph.setEnabled(false);
-      this.enemies.push({ id: index, root, body, head, limbs, health: zombieHealth(1, kind), alive: false, attackAt: 0, phase: spawn.id, hitAt: 0, windupUntil: 0, telegraph });
+      this.enemies.push({ id: index, root, body, head, limbs, health: zombieHealth(1, kind), alive: false, attackAt: 0, phase: spawn.id, hitAt: 0, windupUntil: 0, assetVersion: 0, deadAt: 0, telegraph });
       root.setEnabled(false);
     }
   }
@@ -1075,6 +1141,8 @@ export class Game {
     const meta = enemy.root.metadata as { kind?: ZombieKind };
     if (meta.kind === kind) return;
     meta.kind = kind;
+    const assetKind = this.enemyKind(enemy);
+    if (enemy.assetKind && enemy.assetKind !== assetKind) void this.upgradeEnemy(enemy).catch(() => console.warn('Infected variant asset could not be loaded.'));
     const scale = kind === 'brute' ? 1.35 : kind === 'runner' ? 0.88 : 1;
     enemy.root.scaling.set(scale, kind === 'brute' ? 1.2 : 1, scale);
     enemy.body.material = this.material(new Color3(kind === 'brute' ? 0.24 : kind === 'runner' ? 0.32 : 0.19, kind === 'runner' ? 0.16 : 0.22, 0.17));
@@ -1084,6 +1152,17 @@ export class Game {
       if (mesh.name === 'spitter acid sac' || mesh.name === 'spitter jaw') mesh.setEnabled(kind === 'spitter');
       if (mesh.name === 'infected eyes' && kind === 'spitter') mesh.material = this.material(new Color3(0.65, 1, 0.12), 1.6);
     }
+  }
+
+  private updatePerformanceReadout() {
+    if (location.hash !== '#debug' || performance.now() <= this.performanceUiAt) return;
+    this.performanceUiAt = performance.now() + 500;
+    let readout = document.getElementById('performance-readout');
+    if (!readout) {
+      readout = document.createElement('div'); readout.id = 'performance-readout'; readout.className = 'performance-readout'; document.body.append(readout);
+    }
+    const rigs = [...this.operatorModels.values()].filter((rig) => rig.asset).length + this.enemies.filter((enemy) => enemy.asset).length;
+    readout.textContent = `${this.engine.getFps().toFixed(0)} FPS · ${this.scene.getActiveMeshes().length} meshes · ${this.sceneInstrumentation.drawCallsCounter.current} calls · ${this.scene.getActiveIndices() / 3} tris · ${rigs} rigs`;
   }
 
   private update() {
@@ -1161,7 +1240,12 @@ export class Game {
   private animateEnemies(dt: number) {
     const now = performance.now();
     for (const enemy of this.enemies) {
-      if (!enemy.alive) continue;
+      if (enemy.assetKind !== this.enemyKind(enemy)) void this.upgradeEnemy(enemy).catch(() => console.warn('Infected variant asset could not be loaded.'));
+      if (!enemy.alive) {
+        if (enemy.deadAt && now - enemy.deadAt >= 4000) { enemy.root.setEnabled(false); enemy.deadAt = 0; }
+        continue;
+      }
+      enemy.deadAt = 0;
       const target = this.isCoop ? this.enemyTargets.get(enemy.id) : undefined;
       const moving = this.isCoop ? (target ? Vector3.Distance(target.position, enemy.root.position) > 0.04 : false) : true;
       const meta = enemy.root.metadata as { zombie?: boolean; kind?: string; boss?: boolean };
@@ -1170,6 +1254,7 @@ export class Game {
       enemy.hitAt = Math.max(0, enemy.hitAt - dt * 1000);
       enemy.root.rotation.z += ((enemy.hitAt > 0 ? 0.1 : 0) - enemy.root.rotation.z) * Math.min(1, dt * 18);
       const windup = enemy.windupUntil > now;
+      if (enemy.asset) enemy.asset.play(characterClip((meta.zombie ? meta.kind === 'runner' ? 'infectedRunner' : meta.kind ?? 'walker' : 'hostile') as 'hostile' | 'walker' | 'infectedRunner' | 'brute' | 'spitter', moving, windup, enemy.hitAt > 0));
       enemy.telegraph?.setEnabled(windup && (meta.kind === 'brute' || meta.kind === 'spitter' || meta.boss === true));
       if (enemy.telegraph?.isEnabled()) enemy.telegraph.scaling.setAll(0.85 + Math.sin(now * 0.02) * 0.15);
       const stagger = meta.zombie ? (enemy.phase % 2 ? 0.1 : -0.1) : 0;
@@ -1455,6 +1540,7 @@ export class Game {
   }
 
   private damageEnemy(enemy: Enemy, damage: number) {
+    if (!enemy.alive) return;
     enemy.health -= damage;
     enemy.hitAt = 150;
     const killed = enemy.health <= 0;
@@ -1462,7 +1548,13 @@ export class Game {
     this.combatAudio?.hit(killed);
     if (enemy.health <= 0) {
       enemy.alive = false;
-      enemy.root.setEnabled(false);
+      enemy.deadAt = performance.now();
+      if (enemy.asset) {
+        enemy.asset.root.setEnabled(true);
+        enemy.asset.play('Death', false);
+        enemy.telegraph?.setEnabled(false);
+        enemy.muzzleFlash?.setEnabled(false);
+      } else enemy.root.setEnabled(false);
       this.kills++;
       this.events.onEnemies(this.enemies.length - this.kills);
       this.events.onBoss(this.enemies.find((entry) => (entry.root.metadata as { boss: boolean }).boss)?.health ?? 0, 800);
@@ -1497,10 +1589,12 @@ export class Game {
       if (!meta.zombie) continue;
       this.applyZombieKind(enemy, zombieKind(enemy.phase, this.wave));
       enemy.alive = enemy.phase < zombieWaveSize(this.wave);
+      enemy.deadAt = 0;
       enemy.health = zombieHealth(this.wave, zombieKind(enemy.phase, this.wave));
       enemy.attackAt = 0;
       enemy.root.position.copyFrom((meta as { spawn: Vector3 }).spawn);
       enemy.root.setEnabled(enemy.alive);
+      if (enemy.alive) enemy.asset?.play('Idle');
     }
     this.events.onEnemies(zombieWaveSize(this.wave));
     this.events.onMessage(`WAVE ${this.wave} INCOMING`);

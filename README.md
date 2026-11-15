@@ -1,6 +1,6 @@
 # VAULTBREAK
 
-A small desktop-browser FPS prototype built with Babylon.js, TypeScript, and Vite. Everything in the dungeon, including enemies and weapons, is generated from low-poly geometry—no external game assets required.
+A desktop and landscape-mobile browser FPS built with Babylon.js, TypeScript, and Vite. Rigged CC0 soldiers and infected are combined with procedural weapons, environments, regional hitboxes, and automatic geometry fallbacks.
 
 ## Run
 
@@ -40,6 +40,12 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 2. **Current — combat polish:** weapon-specific synthesized audio, smoother handling, responsive crosshair and hit feedback, and separated enemy hordes. Co-op tracks individual eliminations and resets downed players correctly.
 3. **Next — balance and content:** weapon feel, enemy pacing, wave difficulty, UI, and performance based on complete solo/co-op playtests, followed by unlocks and new objectives.
 4. **Later — expansion:** more weapons, maps, and objectives.
+
+## Character assets and performance
+
+Local GLB soldiers and infected use their original skeletal rigs and 17 animation clips, including movement, attacks, hit reactions, and persistent four-second death poses. Assets are cached once and instantiated per character. Zombie rigs change with their wave variant; invisible procedural head/torso/limb hitboxes retain regional damage. Failed asset loads retain the procedural fallback. See `public/assets/ATTRIBUTION.md` for CC0 provenance.
+
+Touch devices render at 1.25 hardware scaling and skip bloom. Hidden rigs do not animate, and characters use normal frustum culling. Open `http://localhost:5173/#debug` for FPS, active meshes, draw calls, triangles, and loaded rigs. Real-device mobile profiling is still required; desktop browser automation is not a mobile GPU benchmark.
 
 ## Mobile
 
