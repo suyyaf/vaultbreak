@@ -4,6 +4,7 @@ import { EnemyState, PlayerState, WorldState } from '../src/network';
 import { COVER, ENEMY_SPAWNS, GATE_Z, SUPPLIES } from '../src/dungeon';
 import { GameMode, ZOMBIE_SPAWNS, zombieDamage, zombieHealth, zombieKind, zombieSpeed, zombieWaveSize } from '../src/modes';
 import { PerkId, PERKS } from '../src/perks';
+import { GrenadeState, GRENADE_CAPACITY, grenadeDamage } from '../src/equipment';
 
 interface Client {
   ws: WebSocket;
@@ -17,6 +18,8 @@ interface Client {
   downedAt: number;
   reviveStartedAt: number;
   reviverId: string;
+  grenades: number;
+  nextGrenadeAt: number;
 }
 
 
@@ -30,6 +33,8 @@ class Room {
   mode: GameMode = 'dungeon';
   wave = 1;
   nextWaveAt = 0;
+  grenades: GrenadeState[] = [];
+  nextGrenadeId = 1;
   timer?: NodeJS.Timeout;
 
   constructor(readonly code: string, mode: GameMode = 'dungeon') { this.mode = mode; this.reset(); }
@@ -37,6 +42,7 @@ class Room {
   reset() {
     this.wave = 1;
     this.nextWaveAt = 0;
+    this.grenades = [];
     this.enemies = this.mode === 'zombies'
       ? ZOMBIE_SPAWNS.map((spawn, id) => ({ id, x: spawn.x, z: spawn.z, yaw: 0, health: zombieHealth(1, zombieKind(id, 1)), alive: id < zombieWaveSize(1), stage: 0, boss: false, zombie: true, kind: zombieKind(id, 1), windupUntil: 0 }))
       : ENEMY_SPAWNS.map((spawn, id) => ({ id, x: spawn.x, z: spawn.z, yaw: 0, health: spawn.boss ? 800 : 100, alive: true, stage: spawn.stage, boss: spawn.boss, zombie: false, kind: 'soldier' as const, windupUntil: 0 }));
@@ -48,6 +54,9 @@ class Room {
       client.health = PERKS[client.perk].maxHealth;
       client.player.health = client.health;
       client.nextShotAt = 0;
+      client.grenades = GRENADE_CAPACITY;
+      client.nextGrenadeAt = 0;
+      this.send(client, { type: 'equipment', grenades: client.grenades });
       client.player.kills = 0;
       client.player.downed = false;
       client.player.reviveProgress = 0;
@@ -69,6 +78,7 @@ class Room {
     client.room = this.code;
     client.player = { id: client.player.id, x: (this.clients.size - 1) * 1.5, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0, health: 100 };
     this.send(client, { type: 'joined', id: client.player.id, room: this.code });
+    this.send(client, { type: 'equipment', grenades: client.grenades });
     if (!this.timer) this.timer = setInterval(() => this.tick(), 50);
   }
 
@@ -115,25 +125,26 @@ class Room {
       enemy.health -= damage;
       if (enemy.health <= 0) { enemy.health = 0; enemy.alive = false; client.player.kills++; }
       this.send(client, { type: 'hit', killed: !enemy.alive });
-      if (this.enemies.every((entry) => entry.stage !== this.stage || !entry.alive)) {
-        if (this.mode === 'zombies') {
-          if (!this.nextWaveAt) {
-            this.nextWaveAt = Date.now() + 7000;
-            this.supplies.clear();
-            for (const player of this.clients) this.send(player, { type: 'notice', message: `WAVE ${this.wave} CLEARED — RESUPPLY` });
-          }
-        } else if (this.stage === 2) this.ended = 'won';
-        else {
-          this.stage++;
-          for (const player of this.clients) this.send(player, { type: 'notice', message: `GATE OPEN — CHAMBER ${this.stage + 1}` });
-        }
-      }
+      this.checkStageClear(client);
+    }
+    if (data.type === 'grenade' && !this.ended && !client.player.downed && client.grenades > 0 && Date.now() >= client.nextGrenadeAt) {
+      const values = ['x', 'y', 'z', 'vx', 'vy', 'vz'].map((key) => Number(data[key]));
+      if (!values.every(Number.isFinite) || Math.hypot(values[0] - client.player.x, values[2] - client.player.z) > 2) return;
+      const [x, y, z, vx, vy, vz] = values;
+      const speed = Math.hypot(vx, vy, vz);
+      if (speed > 18) return;
+      client.grenades--;
+      client.nextGrenadeAt = Date.now() + 650;
+      this.send(client, { type: 'equipment', grenades: client.grenades });
+      this.grenades.push({ id: this.nextGrenadeId++, x, y: Math.max(0.3, Math.min(4.5, y)), z, vx, vy, vz, explodeAt: Date.now() + 1800, owner: client.player.id });
     }
     if (data.type === 'supply') {
       const supply = SUPPLIES.find((entry) => entry.id === Number(data.supplyId));
       if (!supply || this.supplies.has(supply.id)) return;
       if (Math.hypot(supply.x - client.player.x, supply.z - client.player.z) > 2) return;
       this.supplies.add(supply.id);
+      client.grenades = GRENADE_CAPACITY;
+      this.send(client, { type: 'equipment', grenades: client.grenades });
       if (supply.kind === 'health') {
         client.health = Math.min(PERKS[client.perk].maxHealth, client.health + 50);
         this.send(client, { type: 'damaged', health: client.health });
@@ -166,6 +177,7 @@ class Room {
         });
         for (const player of this.clients) this.send(player, { type: 'notice', message: `WAVE ${this.wave} INCOMING` });
       }
+      this.updateGrenades();
       const players = Array.from(this.clients);
       for (const client of players) {
         if (!client.player.downed) continue;
@@ -252,10 +264,55 @@ class Room {
       mode: this.mode,
       wave: this.wave,
       nextWaveAt: this.nextWaveAt,
+      grenades: this.grenades,
     };
     for (const client of this.clients) {
       client.player.health = client.health;
       this.send(client, { type: 'state', state });
+    }
+  }
+
+  updateGrenades() {
+    for (let i = this.grenades.length - 1; i >= 0; i--) {
+      const grenade = this.grenades[i];
+      grenade.vy -= 0.6;
+      const nx = grenade.x + grenade.vx * 0.05;
+      const nz = grenade.z + grenade.vz * 0.05;
+      if (this.blocked(nx, nz)) { grenade.vx *= -0.45; grenade.vz *= -0.45; }
+      else { grenade.x = nx; grenade.z = nz; }
+      grenade.y += grenade.vy * 0.05;
+      if (grenade.y < 0.1) { grenade.y = 0.1; grenade.vy = Math.abs(grenade.vy) * 0.42; grenade.vx *= 0.72; grenade.vz *= 0.72; }
+      if (Date.now() < grenade.explodeAt) continue;
+      this.grenades.splice(i, 1);
+      for (const client of this.clients) this.send(client, { type: 'explosion', x: grenade.x, y: grenade.y, z: grenade.z });
+      const owner = Array.from(this.clients).find((client) => client.player.id === grenade.owner);
+      if (!owner) continue;
+      let hit = false;
+      for (const enemy of this.enemies) {
+        if (!enemy.alive || enemy.stage !== this.stage) continue;
+        const distance = Math.hypot(enemy.x - grenade.x, enemy.z - grenade.z);
+        if (distance >= 5) continue;
+        enemy.health -= grenadeDamage(distance);
+        hit = true;
+        if (enemy.health <= 0) { enemy.health = 0; enemy.alive = false; owner.player.kills++; }
+      }
+      if (hit) this.send(owner, { type: 'hit', killed: this.enemies.some((enemy) => !enemy.alive && Math.hypot(enemy.x - grenade.x, enemy.z - grenade.z) < 5) });
+      this.checkStageClear(owner);
+    }
+  }
+
+  checkStageClear(_owner: Client) {
+    if (this.ended || this.enemies.some((entry) => entry.stage === this.stage && entry.alive)) return;
+    if (this.mode === 'zombies') {
+      if (!this.nextWaveAt) {
+        this.nextWaveAt = Date.now() + 7000;
+        this.supplies.clear();
+        for (const player of this.clients) this.send(player, { type: 'notice', message: `WAVE ${this.wave} CLEARED — RESUPPLY` });
+      }
+    } else if (this.stage === 2) this.ended = 'won';
+    else {
+      this.stage++;
+      for (const player of this.clients) this.send(player, { type: 'notice', message: `GATE OPEN — CHAMBER ${this.stage + 1}` });
     }
   }
 
@@ -278,7 +335,7 @@ const wss = new WebSocketServer({ port });
 const rooms = new Map<string, Room>();
 let nextId = 1;
 wss.on('connection', (ws) => {
-  const client: Client = { ws, room: '', health: 100, weapon: 'rifle', perk: 'runner', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0, health: 100 } };
+  const client: Client = { ws, room: '', health: 100, weapon: 'rifle', perk: 'runner', loadout: { optic: false, grip: false, magazine: false }, nextShotAt: 0, downedAt: 0, reviveStartedAt: 0, reviverId: '', grenades: GRENADE_CAPACITY, nextGrenadeAt: 0, player: { id: `P${nextId++}`, x: 0, y: 1.7, z: 17, yaw: 0, pitch: 0, downed: false, reviveProgress: 0, kills: 0, health: 100 } };
   ws.on('message', (raw) => {
     try {
       const data = JSON.parse(raw.toString()) as { type: string; room?: string; mode?: string };

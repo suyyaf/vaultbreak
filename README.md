@@ -21,6 +21,7 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 - **Right click:** aim down sights
 - **Shift:** sprint
 - **R:** reload with animated magazine swap
+- **G:** throw a frag grenade (two carried; area damage, falloff, and cover bounces)
 - **Space:** jump
 - **C / Left Ctrl:** toggle crouch; while holding Shift, slide
 - **Hold E near a downed teammate:** revive (3 seconds)
@@ -49,7 +50,7 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 - **Juggernaut:** 125 maximum health with a slight speed penalty.
 - **Combat Medic:** revive teammates in 1.5 seconds instead of 3, restoring 75 HP instead of 50.
 
-Co-op includes a squad HUD with each player's health, downed state, and individual eliminations.
+Co-op includes a squad HUD with each player's health, downed state, and individual eliminations. Grenades are server-authoritative in co-op, including damage and elimination credit; collecting ammunition resupplies both carried grenades.
 
 Zombie waves introduce fast, fragile runners and slow, durable brutes from wave two. Heavy infected and the Warden display an attack wind-up before dealing damage.
 

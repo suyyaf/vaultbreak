@@ -1,4 +1,5 @@
 import { GameMode, ZombieKind } from './modes';
+import { GrenadeState } from './equipment';
 
 export interface EnemyState {
   id: number;
@@ -38,6 +39,7 @@ export interface WorldState {
   mode: GameMode;
   wave: number;
   nextWaveAt: number;
+  grenades: GrenadeState[];
 }
 
 export type ServerMessage =
@@ -46,4 +48,6 @@ export type ServerMessage =
   | { type: 'hit'; killed: boolean }
   | { type: 'damaged'; health: number }
   | { type: 'notice'; message: string }
+  | { type: 'equipment'; grenades: number }
+  | { type: 'explosion'; x: number; y: number; z: number }
   | { type: 'error'; message: string };

@@ -75,6 +75,7 @@ const game = new Game(engine, {
     byId('boss-health').style.width = `${Math.max(0, health / maxHealth * 100)}%`;
   },
   onSpread: (spread) => { byId('crosshair').style.setProperty('--spread', `${spread}px`); },
+  onGrenades: (count) => { byId('grenade-count').textContent = String(count).padStart(2, '0'); },
   onPause: () => {
     if (game.currentState !== 'paused') return;
     byId('pause').classList.remove('hidden');

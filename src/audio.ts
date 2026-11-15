@@ -29,6 +29,12 @@ export class CombatAudio {
   damage() { this.tone(this.context.currentTime, 65, 32, 0.16, 0.1, 'sawtooth'); }
   pickup() { this.tone(this.context.currentTime, 540, 880, 0.13, 0.045, 'sine'); }
   empty() { this.tone(this.context.currentTime, 190, 120, 0.035, 0.035, 'square'); }
+  throwGrenade() { this.noiseBurst(this.context.currentTime, 0.08, 0.045, 1200); }
+  explosion() {
+    const now = this.context.currentTime;
+    this.noiseBurst(now, 0.65, 0.45, 700);
+    this.tone(now, 90, 24, 0.55, 0.3, 'sawtooth');
+  }
 
   private tone(start: number, from: number, to: number, duration: number, volume: number, type: OscillatorType) {
     const oscillator = this.context.createOscillator();

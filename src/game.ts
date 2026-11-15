@@ -9,6 +9,7 @@ import { GameMode, ZombieKind, ZOMBIE_SPAWNS, zombieDamage, zombieHealth, zombie
 import { PerkId, PERKS } from './perks';
 import { buildWeaponModel } from './weaponModels';
 import { CombatAudio } from './audio';
+import { GrenadeState, GRENADE_CAPACITY, GRENADE_FUSE_MS, grenadeDamage } from './equipment';
 
 export type GameState = 'menu' | 'playing' | 'paused' | 'won' | 'lost';
 export interface GameEvents {
@@ -30,6 +31,7 @@ export interface GameEvents {
   onObjective: (message: string) => void;
   onWave: (wave: number) => void;
   onSpread: (spread: number) => void;
+  onGrenades: (count: number) => void;
 }
 
 interface Enemy {
@@ -83,6 +85,11 @@ export class Game {
   private combatAudio?: CombatAudio;
   private weaponKick = 0;
   private lastEmptySound = 0;
+  private grenades = GRENADE_CAPACITY;
+  private localGrenadeId = 0;
+  private readonly localGrenades = new Map<number, GrenadeState>();
+  private readonly grenadeMeshes = new Map<string, Mesh>();
+  private nextGrenadeAt = 0;
   private pointerLocked = false;
   private socket?: WebSocket;
   private playerId = '';
@@ -192,7 +199,11 @@ export class Game {
         }
         if (wasAlive && message.health < previousHealth) this.events.onDamage();
         if (message.health > previousHealth && this.lastWorld && this.lastWorld.elapsed < 0.2) this.camera.position.y = Math.max(this.camera.position.y, 1.7);
-      } else if (message.type === 'notice') this.events.onMessage(message.message);
+      } else if (message.type === 'equipment') {
+        this.grenades = message.grenades;
+        this.events.onGrenades(this.grenades);
+      } else if (message.type === 'explosion') this.explode(new Vector3(message.x, message.y, message.z));
+      else if (message.type === 'notice') this.events.onMessage(message.message);
       else if (message.type === 'error') this.events.onMessage(message.message);
     });
     this.socket.addEventListener('close', () => {
@@ -232,6 +243,16 @@ export class Game {
     this.networkClockOffset = clockOffset;
     const me = world.players.find((player) => player.id === this.playerId);
     this.downed = me?.downed ?? false;
+    const activeGrenades = new Set<string>();
+    for (const grenade of world.grenades) {
+      const key = `server-${grenade.id}`;
+      activeGrenades.add(key);
+      const mesh = this.grenadeMeshes.get(key) ?? this.createGrenadeMesh(key);
+      mesh.position.set(grenade.x, grenade.y, grenade.z);
+    }
+    for (const [key, mesh] of this.grenadeMeshes) {
+      if (key.startsWith('server-') && !activeGrenades.has(key)) { mesh.dispose(); this.grenadeMeshes.delete(key); }
+    }
     if (this.isCoop && this.mode === 'zombies') this.nextWaveAt += this.networkClockOffset;
     this.reviveTarget = world.players.find((player) => player.downed && player.id !== this.playerId && Math.hypot(player.x - this.camera.position.x, player.z - this.camera.position.z) < 2.8)?.id;
     for (const state of world.enemies) {
@@ -332,6 +353,12 @@ export class Game {
     this.health = PERKS[this.perk].maxHealth;
     this.ammo = this.weapon.magazine;
     this.reserve = Math.round(this.weapon.reserve * PERKS[this.perk].ammo);
+    this.grenades = GRENADE_CAPACITY;
+    this.events.onGrenades(this.grenades);
+    this.nextGrenadeAt = 0;
+    this.localGrenades.clear();
+    for (const mesh of this.grenadeMeshes.values()) mesh.dispose();
+    this.grenadeMeshes.clear();
     this.kills = 0;
     this.shots = 0;
     this.firing = false;
@@ -397,6 +424,7 @@ export class Game {
       this.keys.add(event.code);
       if (event.repeat) return;
       if (event.code === 'KeyR' && this.state === 'playing') this.reload();
+      if (event.code === 'KeyG' && this.state === 'playing' && !this.downed) this.throwGrenade();
       if (event.code === 'Space' && this.state === 'playing') {
         event.preventDefault();
         this.jump();
@@ -711,6 +739,7 @@ export class Game {
     this.updateSupplies();
     this.interpolateNetwork(dt);
     this.animateEnemies(dt);
+    this.updateGrenades(dt);
     if (this.mode === 'zombies') {
       if (this.waveBreak) {
         const seconds = Math.max(0, Math.ceil((this.nextWaveAt - Date.now()) / 1000));
@@ -920,9 +949,86 @@ export class Game {
     }
     for (const hit of hits.values()) {
       const falloff = this.weapon.id === 'shotgun' ? Math.max(0.45, 1 - this.camera.position.subtract(hit.enemy.root.position).length() / this.weapon.range * 0.65) : 1;
-      if (this.isCoop) this.sendNetwork({ type: 'shoot', enemyId: hit.enemy.phase === 12 && false ? 0 : hit.enemy.id, headshot: hit.headshot, pellets: hit.pellets });
+      if (this.isCoop) this.sendNetwork({ type: 'shoot', enemyId: hit.enemy.id, headshot: hit.headshot, pellets: hit.pellets });
       else this.damageEnemy(hit.enemy, this.weapon.damage * hit.pellets * (hit.headshot ? 2 : 1) * falloff);
     }
+  }
+
+  private createGrenadeMesh(key: string) {
+    const mesh = MeshBuilder.CreateSphere(key, { diameter: 0.16, segments: 5 }, this.scene);
+    mesh.material = this.material(new Color3(0.32, 0.38, 0.18));
+    mesh.isPickable = false;
+    mesh.checkCollisions = false;
+    this.grenadeMeshes.set(key, mesh);
+    return mesh;
+  }
+
+  private throwGrenade() {
+    const now = performance.now();
+    if (this.grenades <= 0 || now < this.nextGrenadeAt) {
+      if (this.grenades <= 0) this.combatAudio?.empty();
+      return;
+    }
+    this.nextGrenadeAt = now + 650;
+    this.grenades--;
+    this.events.onGrenades(this.grenades);
+    this.combatAudio?.throwGrenade();
+    const direction = this.camera.getDirection(Vector3.Forward());
+    const position = this.camera.position.add(direction.scale(0.65));
+    if (this.isCoop) {
+      this.sendNetwork({ type: 'grenade', x: position.x, y: position.y, z: position.z, vx: direction.x * 10, vy: direction.y * 10 + 4.5, vz: direction.z * 10 });
+      return;
+    }
+    const id = ++this.localGrenadeId;
+    this.localGrenades.set(id, { id, x: position.x, y: position.y, z: position.z, vx: direction.x * 10, vy: direction.y * 10 + 4.5, vz: direction.z * 10, explodeAt: now + GRENADE_FUSE_MS, owner: 'local' });
+    this.createGrenadeMesh(`local-${id}`);
+  }
+
+  private updateGrenades(dt: number) {
+    if (this.isCoop) return;
+    const now = performance.now();
+    for (const [id, grenade] of this.localGrenades) {
+      grenade.vy -= 12 * dt;
+      const next = new Vector3(grenade.x + grenade.vx * dt, grenade.y + grenade.vy * dt, grenade.z + grenade.vz * dt);
+      if (this.blocked(next)) { grenade.vx *= -0.45; grenade.vz *= -0.45; }
+      else { grenade.x = next.x; grenade.z = next.z; }
+      grenade.y = next.y;
+      if (grenade.y < 0.1) { grenade.y = 0.1; grenade.vy = Math.abs(grenade.vy) * 0.42; grenade.vx *= 0.72; grenade.vz *= 0.72; }
+      const mesh = this.grenadeMeshes.get(`local-${id}`);
+      if (mesh) { mesh.position.set(grenade.x, grenade.y, grenade.z); mesh.rotation.x += dt * 8; }
+      if (now < grenade.explodeAt) continue;
+      this.localGrenades.delete(id);
+      mesh?.dispose();
+      this.grenadeMeshes.delete(`local-${id}`);
+      const position = new Vector3(grenade.x, grenade.y, grenade.z);
+      this.explode(position);
+      for (const enemy of this.enemies) {
+        if (!enemy.alive) continue;
+        const meta = enemy.root.metadata as { zombie?: boolean; stage: number };
+        if (!!meta.zombie !== (this.mode === 'zombies') || meta.stage !== this.stage) continue;
+        const distance = Vector3.Distance(enemy.root.position, position);
+        if (distance < 5) this.damageEnemy(enemy, grenadeDamage(distance));
+      }
+    }
+  }
+
+  private explode(position: Vector3) {
+    this.combatAudio?.explosion();
+    const blast = MeshBuilder.CreateSphere('grenade blast', { diameter: 1, segments: 8 }, this.scene);
+    blast.position.copyFrom(position);
+    const material = this.material(new Color3(1, 0.42, 0.08), 2);
+    material.alpha = 0.8;
+    blast.material = material;
+    blast.isPickable = false;
+    const start = performance.now();
+    const animate = () => {
+      const progress = Math.min(1, (performance.now() - start) / 350);
+      blast.scaling.setAll(1 + progress * 8);
+      material.alpha = 0.8 * (1 - progress);
+      if (progress < 1) requestAnimationFrame(animate);
+      else { blast.dispose(); material.dispose(); }
+    };
+    animate();
   }
 
   private damageEnemy(enemy: Enemy, damage: number) {
@@ -952,6 +1058,8 @@ export class Game {
     this.waveBreak = true;
     this.nextWaveAt = performance.now() + 7000;
     this.collectedSupplies.clear();
+    this.grenades = GRENADE_CAPACITY;
+    this.events.onGrenades(this.grenades);
     this.events.onMessage(`WAVE ${this.wave} CLEARED — RESUPPLY`);
   }
 
@@ -998,6 +1106,10 @@ export class Game {
       this.collectedSupplies.add(supply.id);
       mesh?.setEnabled(false);
       if (this.isCoop) this.sendNetwork({ type: 'supply', supplyId: supply.id });
+      else {
+        this.grenades = GRENADE_CAPACITY;
+        this.events.onGrenades(this.grenades);
+      }
       if (supply.kind === 'health') {
         this.health = Math.min(PERKS[this.perk].maxHealth, this.health + 50);
         this.events.onHealth(this.health);
