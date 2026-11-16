@@ -12,22 +12,24 @@ export interface CharacterAsset {
   animations: Map<string, AnimationGroup>;
   current?: AnimationGroup;
   play: (name: string, loop?: boolean, speed?: number) => void;
+  stop: () => void;
   dispose: () => void;
 }
 
-const MODELS: Record<CharacterKind, { file: string; height: number; tint?: Color3 }> = {
-  runner: { file: 'soldier-female', height: 1.85, tint: new Color3(0.7, 0.9, 0.5) },
-  scavenger: { file: 'soldier-male', height: 1.95, tint: new Color3(0.95, 0.78, 0.5) },
-  juggernaut: { file: 'soldier-male', height: 2.1, tint: new Color3(0.7, 0.82, 0.9) },
-  medic: { file: 'soldier-female', height: 1.9, tint: new Color3(0.55, 0.95, 0.95) },
-  hostile: { file: 'soldier-male', height: 1.95, tint: new Color3(0.48, 0.54, 0.44) },
-  walker: { file: 'zombie-male', height: 1.9 },
-  infectedRunner: { file: 'zombie-female', height: 1.8 },
-  brute: { file: 'zombie-male', height: 2.1, tint: new Color3(0.8, 0.95, 0.75) },
-  spitter: { file: 'zombie-female', height: 1.9, tint: new Color3(0.75, 1, 0.55) },
+const MODELS: Record<CharacterKind, { file: string; height: number; tint?: Color3; skin?: Color3 }> = {
+  runner: { file: 'soldier-female', height: 1.85, tint: new Color3(0.62, 0.82, 0.44) },
+  scavenger: { file: 'soldier-male', height: 1.95, tint: new Color3(0.82, 0.62, 0.3) },
+  juggernaut: { file: 'soldier-male', height: 2.1, tint: new Color3(0.4, 0.52, 0.62) },
+  medic: { file: 'soldier-female', height: 1.9, tint: new Color3(0.32, 0.7, 0.72) },
+  hostile: { file: 'soldier-male', height: 1.95, tint: new Color3(0.34, 0.39, 0.31) },
+  walker: { file: 'zombie-male', height: 1.9, skin: new Color3(0.42, 0.48, 0.3) },
+  infectedRunner: { file: 'zombie-female', height: 1.8, skin: new Color3(0.52, 0.31, 0.2) },
+  brute: { file: 'zombie-male', height: 2.1, skin: new Color3(0.3, 0.4, 0.27) },
+  spitter: { file: 'zombie-female', height: 1.9, skin: new Color3(0.3, 0.55, 0.2) },
 };
 
 const containers = new Map<string, Promise<AssetContainer>>();
+const variants = new Map<CharacterKind, Map<number, PBRMaterial>>();
 
 function loadContainer(scene: Scene, file: string) {
   let request = containers.get(file);
@@ -47,23 +49,33 @@ export async function loadCharacter(scene: Scene, kind: CharacterKind, parent: T
   root.parent = parent;
   for (const node of instances.rootNodes) node.parent = root;
   const meshes = root.getChildMeshes(false);
+  let variantMaterials = variants.get(kind);
+  if (!variantMaterials) {
+    variantMaterials = new Map();
+    variants.set(kind, variantMaterials);
+  }
   for (const mesh of meshes) {
     mesh.isPickable = false;
     mesh.checkCollisions = false;
-    for (const material of mesh.material instanceof PBRMaterial ? [mesh.material] : []) {
-    }
     mesh.isVisible = true;
     mesh.visibility = 1;
-    mesh.computeWorldMatrix(true);
     if (mesh.material instanceof PBRMaterial) {
-      if (spec.tint && mesh.material.name === 'Main') mesh.material.albedoColor = spec.tint;
-      mesh.material.metallic = 0;
-      mesh.material.roughness = 0.85;
-      mesh.material.environmentIntensity = 0.5;
-      mesh.material.directIntensity = 0.9;
+      let material = variantMaterials.get(mesh.material.uniqueId);
+      if (!material) {
+        material = mesh.material.clone(`${kind}:${mesh.material.name}`) as PBRMaterial;
+        material.metallic = 0;
+        material.roughness = 0.85;
+        material.environmentIntensity = 0.5;
+        material.directIntensity = 0.9;
+        if (spec.tint && material.name.endsWith(':Main')) material.albedoColor = spec.tint;
+        if (spec.skin && material.name.endsWith(':Skin')) material.albedoColor = spec.skin;
+        variantMaterials.set(mesh.material.uniqueId, material);
+      }
+      mesh.material = material;
     }
   }
-  root.scaling.setAll(spec.height / 1.8);
+  const authoredHeight = Math.max(...meshes.map((mesh) => mesh.getBoundingInfo().boundingBox.maximum.y), 1);
+  root.scaling.setAll(spec.height / authoredHeight);
   root.rotation.y = 0;
   const animations = new Map(instances.animationGroups.map((group) => [group.name.split(':').pop()!, group]));
   const asset: CharacterAsset = {
@@ -77,13 +89,15 @@ export async function loadCharacter(scene: Scene, kind: CharacterKind, parent: T
       next.start(loop, speed);
       asset.current = next;
     },
+    stop() {
+      asset.current?.stop();
+    },
     dispose() {
       for (const group of instances.animationGroups) group.dispose();
       for (const node of instances.rootNodes) node.dispose(false, true);
       root.dispose();
     },
   };
-  asset.play('Idle');
   return asset;
 }
 

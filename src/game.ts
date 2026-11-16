@@ -129,7 +129,7 @@ export class Game {
   private verticalVelocity = 0;
   private reloadStartedAt = 0;
   private gateMarker!: Mesh;
-  private weaponBaseZ = -0.75;
+  private weaponBaseZ = 0.56;
   private mode: GameMode = 'dungeon';
   private wave = 1;
   private nextWaveAt = 0;
@@ -143,6 +143,7 @@ export class Game {
   private operatorSelectedAt = 0;
   private operatorInspection = false;
   private performanceUiAt = 0;
+  private glowLayer?: GlowLayer;
   private readonly sceneInstrumentation: SceneInstrumentation;
   private readonly touchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
   private mobileMove = Vector2.Zero();
@@ -220,6 +221,10 @@ export class Game {
     this.operatorInspection = active;
     this.operatorStage.setEnabled(active);
     this.operatorStageLight.setEnabled(active);
+    for (const rig of this.operatorModels.values()) {
+      const light = rig.root.metadata?.previewLight as HemisphericLight | undefined;
+      light?.setEnabled(!active);
+    }
     this.operatorSelectedAt = performance.now();
     for (const [id, rig] of this.operatorModels) {
       const selected = id === this.perk;
@@ -263,7 +268,10 @@ export class Game {
     this.keys.clear();
     this.events.onScope(false);
     this.gun.setEnabled(false);
-    for (const rig of this.operatorModels.values()) rig.root.setEnabled(true);
+    for (const rig of this.operatorModels.values()) {
+      rig.root.setEnabled(true);
+      (rig.root.metadata?.previewLight as HemisphericLight | undefined)?.setEnabled(true);
+    }
   }
 
   setLoadout(weapon: WeaponId, loadout: Loadout) {
@@ -453,14 +461,18 @@ export class Game {
     this.operatorInspection = false;
     this.operatorStage.setEnabled(false);
     this.operatorStageLight.setEnabled(false);
-    for (const rig of this.operatorModels.values()) rig.root.setEnabled(false);
+    for (const rig of this.operatorModels.values()) {
+      rig.root.setEnabled(false);
+      rig.asset?.stop();
+      (rig.root.metadata?.previewLight as HemisphericLight | undefined)?.setEnabled(false);
+    }
     this.pointerLocked = false;
     this.startedAt = performance.now();
     const me = this.lastWorld?.players.find((player) => player.id === this.playerId);
     this.camera.position.set(me?.x ?? 0, 1.7, me?.z ?? 17);
     this.camera.cameraDirection.setAll(0);
     this.verticalVelocity = 0;
-    this.camera.rotation.set(0, 0, 0);
+    this.camera.rotation.set(0, Math.PI, 0);
     this.lockPointer();
     if (!this.audio) {
       this.audio = new AudioContext();
@@ -722,13 +734,18 @@ export class Game {
     const sun = new DirectionalLight('light', new Vector3(-0.25, -1, 0.3), this.scene);
     sun.position = new Vector3(3, 12, -4);
     sun.intensity = 1.15;
-    if (!this.touchDevice) new GlowLayer('glow', this.scene).intensity = 0.25;
-
     const floor = this.material(new Color3(0.16, 0.18, 0.16));
     const wall = this.material(new Color3(0.22, 0.25, 0.22));
     const dark = this.material(new Color3(0.075, 0.09, 0.08));
     const trim = this.material(new Color3(0.32, 0.35, 0.28));
     const glow = this.material(new Color3(0.66, 0.83, 0.28), 1.1);
+    const steel = this.material(new Color3(0.1, 0.12, 0.11));
+    const hazard = this.material(new Color3(0.56, 0.35, 0.07), 0.18);
+    const teal = this.material(new Color3(0.16, 0.7, 0.62), 1.25);
+    const alarm = this.material(new Color3(0.85, 0.16, 0.07), 1.35);
+    this.scene.fogMode = Scene.FOGMODE_EXP2;
+    this.scene.fogDensity = 0.011;
+    this.scene.fogColor = new Color3(0.035, 0.055, 0.047);
 
     this.box('floor', { w: 28, h: 0.4, d: 46 }, new Vector3(0, -0.2, 0), floor);
     this.box('ceiling', { w: 28, h: 0.5, d: 46 }, new Vector3(0, 6.2, 0), dark, false);
@@ -804,6 +821,104 @@ export class Game {
       }
       this.supplyMeshes.set(supply.id, root);
     }
+    for (const [stage, center] of [0, -46, -92].entries()) this.decorateArena(center, stage, { metal: steel, hazard, accent: stage === 1 ? teal : stage === 2 ? alarm : glow });
+    this.batchStaticDungeon();
+    this.buildSelectiveGlow();
+  }
+
+  private decorateArena(center: number, stage: number, mats: { metal: StandardMaterial; hazard: StandardMaterial; accent: StandardMaterial }) {
+    const box = (name: string, w: number, h: number, d: number, x: number, y: number, z: number, material: StandardMaterial, collision = false) => {
+      const mesh = MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, this.scene);
+      mesh.position.set(x, y, z);
+      mesh.material = material;
+      mesh.checkCollisions = collision;
+      mesh.isPickable = false;
+      if (collision) this.obstacles.push(mesh);
+      return mesh;
+    };
+    const pipe = (name: string, x: number, y: number, z: number, height: number, diameter: number, material: StandardMaterial) => {
+      const mesh = MeshBuilder.CreateCylinder(name, { height, diameter, tessellation: 8 }, this.scene);
+      mesh.position.set(x, y, z);
+      mesh.rotation.x = Math.PI / 2;
+      mesh.material = material;
+      mesh.isPickable = false;
+      return mesh;
+    };
+
+    for (const side of [-1, 1]) {
+      const x = side * 13.92;
+      for (const z of [-18, -9, 0, 9, 18]) {
+        box('wall service panel', 0.12, 1.55, 2.2, x, 2.85, center + z, mats.metal);
+        box('wall rail', 0.16, 0.22, 4.4, x, 1.15, center + z, mats.hazard);
+      }
+      for (const z of [-21, -12, -3, 6, 15, 21]) box('wall support rib', 0.3, 5.6, 0.35, x - side * 0.08, 2.9, center + z, mats.metal);
+      box('main cable run', 0.13, 0.13, 42, x - side * 0.2, 4.75, center, mats.metal);
+      pipe('coolant pipe', x - side * 0.45, 5.62, center, 43, 0.17, mats.metal);
+      for (const z of [-18, -6, 6, 18]) pipe('pipe coupling', x - side * 0.45, 5.62, center + z, 0.28, 0.3, mats.hazard);
+      box('ceiling fixture', 0.5, 0.08, 2.8, x - side * 1.2, 5.82, center, mats.accent);
+    }
+    for (const z of [-18, -6, 6, 18]) box('ceiling crossbeam', 27, 0.2, 0.28, 0, 5.7, center + z, mats.metal);
+    for (const z of [-14, 0, 14]) {
+      box('ceiling light housing', 0.52, 0.11, 11, 0, 6.06, center + z, mats.metal);
+      box('ceiling light strip', 0.3, 0.035, 10.2, 0, 5.99, center + z, mats.accent);
+    }
+    for (const side of [-1, 1]) {
+      box('floor service grate', 3.2, 0.035, 5.8, side * 10.2, 0.015, center + (stage ? 3 : -5), mats.metal);
+      for (const z of [-2.4, 0, 2.4]) box('grate rib', 3.1, 0.02, 0.09, side * 10.2, 0.04, center + (stage ? 3 : -5) + z, mats.hazard);
+      box('field crate', 1.25, 0.85, 0.85, side * 10.8, 0.425, center + 11, mats.metal, true);
+      box('field crate lid', 1.31, 0.12, 0.91, side * 10.8, 0.91, center + 11, mats.hazard);
+      pipe('coolant canister', side * 11.7, 0.55, center + 13, 1.1, 0.52, mats.metal);
+      box('hazard stripe', 1.7, 0.08, 0.04, side * 3.15, 0.8, center - 22.28, mats.hazard);
+    }
+    const ring = MeshBuilder.CreateCylinder('arena floor ring', { height: 0.025, diameter: stage === 2 ? 8 : 6.2, tessellation: 32 }, this.scene);
+    ring.position.set(0, 0.014, center + (stage === 2 ? -5 : 2));
+    ring.material = mats.metal;
+    ring.isPickable = false;
+    if (stage === 1) {
+      for (const x of [-5.4, 5.4]) pipe('reactor conduit', x, 3.35, center - 20.7, 3.8, 0.32, mats.accent);
+    }
+    if (stage === 2) {
+      for (const x of [-4.6, 4.6]) box('warden obelisk', 0.42, 3.4, 0.42, x, 1.7, center - 19.5, mats.metal);
+      box('warden warning band', 26, 0.16, 0.05, 0, 4.6, center + 22.7, mats.accent);
+    }
+  }
+
+  private buildSelectiveGlow() {
+    if (this.touchDevice) return;
+    const layer = new GlowLayer('glow', this.scene, { mainTextureFixedSize: 512, blurKernelSize: 24 });
+    layer.intensity = 0.3;
+    for (const mesh of this.scene.meshes) {
+      if (!(mesh instanceof Mesh) || !mesh.isVisible || !(mesh.material instanceof StandardMaterial)) continue;
+      if (mesh.material.emissiveColor.r + mesh.material.emissiveColor.g + mesh.material.emissiveColor.b > 0.2) layer.addIncludedOnlyMesh(mesh);
+    }
+    this.glowLayer = layer;
+  }
+
+  private batchStaticDungeon() {
+    const groups = new Map<string, { meshes: Mesh[]; solid: boolean }>();
+    for (const mesh of this.scene.meshes) {
+      if (!(mesh instanceof Mesh) || mesh.parent || !mesh.material || this.gates.includes(mesh)) continue;
+      const key = `${mesh.material.uniqueId}:${mesh.checkCollisions}`;
+      const group = groups.get(key) ?? { meshes: [], solid: mesh.checkCollisions };
+      group.meshes.push(mesh);
+      groups.set(key, group);
+    }
+    for (const { meshes, solid } of groups.values()) {
+      if (meshes.length < 2) continue;
+      const merged = Mesh.MergeMeshes(meshes, false, true, undefined, false, true);
+      if (!merged) continue;
+      merged.name = `static batch ${meshes[0].material!.name}`;
+      merged.isPickable = solid;
+      merged.checkCollisions = false;
+      merged.metadata = { sightBlocker: solid };
+      merged.freezeWorldMatrix();
+      if (solid) this.obstacles.push(merged);
+      // Lightweight originals preserve exact collision and shot-ray geometry.
+      for (const mesh of meshes) {
+        mesh.isVisible = false;
+        mesh.freezeWorldMatrix();
+      }
+    }
   }
 
   private buildOperatorPreview() {
@@ -862,13 +977,57 @@ export class Game {
       asset.root.position.z = -0.3;
       rig.asset = asset;
       for (const mesh of rig.root.getChildMeshes()) {
-        if (!mesh.name.startsWith(`${id}:`)) mesh.setEnabled(false);
+        if (!mesh.name.startsWith(`${id}:`) && mesh.name !== 'operator platform') mesh.setEnabled(false);
       }
       for (const node of [rig.torso, rig.head, rig.leftArm, rig.rightArm, rig.rifle]) node.setEnabled(false);
+      this.addOperatorGear(id, asset);
     });
     const enemyJobs = this.enemies.map((enemy) => this.upgradeEnemy(enemy));
     const results = await Promise.allSettled([...operatorJobs, ...enemyJobs]);
     if (results.some((result) => result.status === 'rejected')) console.warn('Some enhanced character assets could not be loaded; procedural fallbacks remain active.');
+  }
+
+  private addOperatorGear(id: PerkId, asset: CharacterAsset) {
+    const armor = this.material(new Color3(
+      id === 'runner' ? 0.24 : id === 'scavenger' ? 0.34 : id === 'juggernaut' ? 0.17 : 0.16,
+      id === 'runner' ? 0.3 : id === 'scavenger' ? 0.23 : id === 'juggernaut' ? 0.22 : 0.3,
+      id === 'runner' ? 0.17 : id === 'scavenger' ? 0.12 : id === 'juggernaut' ? 0.2 : 0.29,
+    ), 0.06);
+    const accents = this.material(new Color3(0.72, 0.86, 0.38), 0.9);
+    const dark = this.material(new Color3(0.045, 0.055, 0.05));
+    const part = (name: string, size: [number, number, number], position: [number, number, number], material = armor) => {
+      const mesh = MeshBuilder.CreateBox(`operator gear ${name}`, { width: size[0], height: size[1], depth: size[2] }, this.scene);
+      mesh.parent = asset.root;
+      mesh.position.set(...position);
+      mesh.material = material;
+      mesh.isPickable = false;
+      return mesh;
+    };
+    part('back rig', [0.78, 0.8, 0.28], [0, 1.28, -0.34]);
+    part('belt', [0.78, 0.14, 0.46], [0, 0.88, 0]);
+    part('left pouch', [0.2, 0.3, 0.22], [-0.42, 0.89, 0.06], dark);
+    part('right pouch', [0.2, 0.3, 0.22], [0.42, 0.89, 0.06], dark);
+    part('shoulder left', [0.3, 0.22, 0.42], [-0.54, 1.79, 0]);
+    part('shoulder right', [0.3, 0.22, 0.42], [0.54, 1.79, 0]);
+    if (id === 'runner') {
+      part('radio antenna', [0.035, 0.85, 0.035], [-0.28, 2.2, -0.42], accents);
+      part('light rig', [0.44, 0.34, 0.2], [0, 1.33, -0.5], dark);
+      part('left knee pad', [0.28, 0.3, 0.24], [-0.4, 0.49, 0.16]);
+      part('right knee pad', [0.28, 0.3, 0.24], [0.4, 0.49, 0.16]);
+    } else if (id === 'scavenger') {
+      part('large pack', [0.92, 1, 0.42], [0, 1.37, -0.4]);
+      part('bedroll', [1.02, 0.2, 0.24], [0, 0.82, -0.55], accents);
+      part('left satchel', [0.32, 0.42, 0.3], [-0.55, 1.14, -0.14], dark);
+    } else if (id === 'juggernaut') {
+      part('chest plate', [1.02, 0.74, 0.28], [0, 1.48, 0.18]);
+      part('left pauldron', [0.46, 0.3, 0.6], [-0.58, 1.84, 0]);
+      part('right pauldron', [0.46, 0.3, 0.6], [0.58, 1.84, 0]);
+      part('helmet ridge', [0.44, 0.12, 0.5], [0, 2.11, 0], dark);
+    } else {
+      part('medical pack', [0.84, 0.86, 0.34], [0, 1.32, -0.39]);
+      part('cross vertical', [0.16, 0.44, 0.05], [0, 1.35, -0.58], accents);
+      part('cross horizontal', [0.44, 0.16, 0.05], [0, 1.35, -0.58], accents);
+    }
   }
 
   private enemyKind(enemy: Enemy): CharacterKind {
@@ -890,8 +1049,10 @@ export class Game {
       mesh.isVisible = false;
     }
     enemy.weapon?.setEnabled(false);
-    enemy.asset.root.setEnabled(enemy.alive || enemy.deadAt > 0);
-    if (enemy.alive) asset.play('Idle');
+    const meta = enemy.root.metadata as { stage: number; zombie?: boolean };
+    const active = enemy.alive && meta.stage === this.stage && (this.mode === 'zombies') === !!meta.zombie;
+    enemy.asset.root.setEnabled(active || enemy.deadAt > 0);
+    if (active) asset.play('Idle');
     else if (enemy.deadAt > 0) asset.play('Death', false);
   }
 
@@ -914,6 +1075,7 @@ export class Game {
       rig.root.scaling.setAll(rig.root.scaling.x + ((selected ? this.operatorInspection ? 1.65 : 1.42 : 0.82) - rig.root.scaling.x) * ease);
       rig.root.rotation.y += ((selected ? -0.22 : 0.12) - rig.root.rotation.y) * ease;
       if (rig.asset) {
+        if (!rig.root.isEnabled()) { rig.asset.stop(); return; }
         rig.asset.play(selected ? id === 'juggernaut' ? 'Shoot_OneHanded' : id === 'scavenger' ? 'PickUp' : id === 'medic' ? 'Victory' : 'Idle' : 'Idle');
         return;
       }
@@ -969,10 +1131,12 @@ export class Game {
     this.pumpMesh = model.pump;
     this.gun.parent = this.camera;
     this.gun.setEnabled(this.state !== 'menu');
-    this.gun.scaling.setAll(1);
-    this.weaponBaseZ = this.weapon.id === 'pistol' ? -0.75 : -0.65;
-    this.gun.position.set(0.34, -0.3, this.weaponBaseZ);
-    this.gun.rotation.set(0, 0, 0);
+    this.gun.scaling.setAll(0.46);
+    this.glowLayer?.addIncludedOnlyMesh(this.muzzle);
+    this.weaponBaseZ = this.weapon.id === 'pistol' ? 0.5 : 0.68;
+    this.gun.position.set(0.31, -0.25, this.weaponBaseZ);
+    // Weapon models are authored with the muzzle toward local -Z.
+    this.gun.rotation.set(0, Math.PI, 0);
   }
 
   private spawnEnemies() {
@@ -1030,6 +1194,7 @@ export class Game {
       const muzzleFlash = MeshBuilder.CreateCylinder('hostile muzzle flash', { diameterTop: 0, diameterBottom: 0.3, height: 0.5, tessellation: 5 }, this.scene);
       muzzleFlash.parent = weapon; muzzleFlash.rotation.x = Math.PI / 2; muzzleFlash.position.set(0, 0.025, 1.02);
       muzzleFlash.material = this.material(new Color3(1, 0.55, 0.12), 2.5); muzzleFlash.isPickable = false; muzzleFlash.setEnabled(false);
+      this.glowLayer?.addIncludedOnlyMesh(muzzleFlash);
       make('hostile handguard grip', 0.23, 0.23, 0.25, 1.34, bodyMat, -0.33).position.z = 0.49;
       make('hostile trigger hand', 0.23, 0.23, 0.25, 1.34, bodyMat, 0.4).position.z = 0.31;
       if (spawn.boss) {
@@ -1049,6 +1214,7 @@ export class Game {
         telegraph.material = this.material(new Color3(1, 0.22, 0.05), 1.5);
         telegraph.isPickable = false;
         telegraph.setEnabled(false);
+        this.glowLayer?.addIncludedOnlyMesh(telegraph);
       }
       this.enemies.push({ id: index, root, body, head, limbs, health: 100, alive: true, attackAt: 0, phase: index, hitAt: 0, windupUntil: 0, assetVersion: 0, deadAt: 0, weapon, muzzleFlash, telegraph });
     });
@@ -1130,6 +1296,7 @@ export class Game {
       telegraph.isPickable = false;
       telegraph.checkCollisions = false;
       telegraph.setEnabled(false);
+      this.glowLayer?.addIncludedOnlyMesh(telegraph);
       this.enemies.push({ id: index, root, body, head, limbs, health: zombieHealth(1, kind), alive: false, attackAt: 0, phase: spawn.id, hitAt: 0, windupUntil: 0, assetVersion: 0, deadAt: 0, telegraph });
       root.setEnabled(false);
     }
@@ -1248,8 +1415,11 @@ export class Game {
       enemy.deadAt = 0;
       const target = this.isCoop ? this.enemyTargets.get(enemy.id) : undefined;
       const moving = this.isCoop ? (target ? Vector3.Distance(target.position, enemy.root.position) > 0.04 : false) : true;
-      const meta = enemy.root.metadata as { zombie?: boolean; kind?: string; boss?: boolean };
+      const meta = enemy.root.metadata as { stage: number; zombie?: boolean; kind?: string; boss?: boolean };
       if (meta.zombie && this.isCoop && this.lastWorld?.enemies[enemy.id]) this.applyZombieKind(enemy, this.lastWorld.enemies[enemy.id].kind as ZombieKind);
+      const inActiveStage = meta.stage === this.stage && (this.mode === 'zombies') === !!meta.zombie;
+      enemy.asset?.root.setEnabled(inActiveStage);
+      if (!inActiveStage) { enemy.asset?.stop(); continue; }
       if (moving) enemy.limbs.forEach((limb, index) => { limb.rotation.x = Math.sin(now * (meta.kind === 'runner' ? 0.015 : 0.007) + index * Math.PI) * (meta.zombie ? 0.3 : 0.4); });
       enemy.hitAt = Math.max(0, enemy.hitAt - dt * 1000);
       enemy.root.rotation.z += ((enemy.hitAt > 0 ? 0.1 : 0) - enemy.root.rotation.z) * Math.min(1, dt * 18);
@@ -1316,12 +1486,12 @@ export class Game {
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 12);
     const bob = moving && !this.reducedMotion ? Math.sin(this.walkTime) * 0.008 : 0;
     const reloading = this.reloadAt > 0;
-    const targetX = reloading ? 0.12 : this.aiming ? 0 : 0.34;
-    const targetY = (reloading ? -0.48 : this.aiming ? (this.loadout.optic ? -0.215 : -0.09) : -0.3) + bob;
-    const targetZ = (reloading ? -0.72 : this.aiming ? -0.48 : this.weaponBaseZ);
+    const targetX = reloading ? 0.1 : this.aiming ? 0 : 0.31;
+    const targetY = (reloading ? -0.4 : this.aiming ? (this.loadout.optic ? -0.2 : -0.1) : -0.25) + bob;
+    const targetZ = reloading ? 0.5 : this.aiming ? this.weaponBaseZ + 0.06 : this.weaponBaseZ;
     this.gun.position.x += (targetX - this.gun.position.x) * dt * 14;
     this.gun.position.y += (targetY - this.gun.position.y) * dt * 14;
-    this.gun.position.z += (targetZ + this.recoil - this.gun.position.z) * Math.min(1, dt * 18);
+    this.gun.position.z += (targetZ - this.recoil - this.gun.position.z) * Math.min(1, dt * 18);
     const movementSpread = moving ? 3 : 0;
     this.events.onSpread((this.aiming ? 0 : this.weapon.spread * 75) + movementSpread + this.recoil * 90);
   }
@@ -1647,6 +1817,7 @@ export class Game {
     spark.position.copyFrom(point);
     spark.material = this.material(new Color3(0.85, 0.93, 0.5), 1);
     spark.isPickable = false;
+    this.glowLayer?.addIncludedOnlyMesh(spark);
     setTimeout(() => spark.dispose(), 70);
   }
 
@@ -1654,6 +1825,7 @@ export class Game {
     const mesh = MeshBuilder.CreateSphere('acid projectile', { diameter: 0.24, segments: 5 }, this.scene);
     mesh.material = this.material(new Color3(0.55, 1, 0.08), 2);
     mesh.isPickable = false;
+    this.glowLayer?.addIncludedOnlyMesh(mesh);
     mesh.checkCollisions = false;
     this.acidMeshes.set(id, mesh);
     return mesh;
@@ -1754,7 +1926,7 @@ export class Game {
     const distance = direction.length();
     direction.normalize();
     const ray = new Ray(start, direction);
-    const hit = this.scene.pickWithRay(ray, (mesh) => this.obstacles.some((obstacle) => obstacle === mesh) && mesh.isEnabled());
+    const hit = this.scene.pickWithRay(ray, (mesh) => (mesh.checkCollisions || !!mesh.metadata?.sightBlocker) && mesh.isVisible && mesh.isEnabled());
     return !hit?.hit || hit.distance >= distance;
   }
 

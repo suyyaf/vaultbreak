@@ -17,7 +17,7 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 
 - **WASD:** move
 - **Mouse:** aim
-- **Left click:** fire
+- **Left click:** fire; the first-person weapon is visible in hip fire and iron sights, and hidden while using the red-dot optical scope
 - **Right click:** aim down sights; red-dot-equipped weapons use a circular optical scope
 - **Shift:** sprint
 - **R:** reload with animated magazine swap
@@ -43,9 +43,11 @@ Open the local URL printed by Vite. Click **Deploy** to lock the pointer and pla
 
 ## Character assets and performance
 
-Local GLB soldiers and infected use their original skeletal rigs and 17 animation clips, including movement, attacks, hit reactions, and persistent four-second death poses. Assets are cached once and instantiated per character. Zombie rigs change with their wave variant; invisible procedural head/torso/limb hitboxes retain regional damage. Failed asset loads retain the procedural fallback. See `public/assets/ATTRIBUTION.md` for CC0 provenance.
+Local GLB soldiers and infected use their original skeletal rigs and 17 animation clips, including movement, attacks, hit reactions, and persistent four-second death poses. Assets are cached once and instantiated per character, with independently cloned per-class materials. Rigs are normalized from their authored three-metre size to human scale. Operators carry class-specific backpacks, armor, belts, pouches, and medical or radio equipment. Zombie rigs change with their wave variant; invisible procedural head/torso/limb hitboxes retain regional damage. Failed asset loads retain the procedural fallback. See `public/assets/ATTRIBUTION.md` for CC0 provenance.
 
-Touch devices render at 1.25 hardware scaling and skip bloom. Hidden rigs do not animate, and characters use normal frustum culling. Open `http://localhost:5173/#debug` for FPS, active meshes, draw calls, triangles, and loaded rigs. Real-device mobile profiling is still required; desktop browser automation is not a mobile GPU benchmark.
+Dungeon geometry is batched by material and solidity while lightweight originals preserve exact collision and shot-ray behavior. Modular wall panels, support ribs, cable runs, coolant pipes, ceiling fixtures, warning stripes, service grates, field crates, and stage-specific reactor/Warden details share those batches. Dynamic effects use a selective 512px glow pass instead of a full-scene bloom copy.
+
+Touch devices render at 1.25 hardware scaling and skip bloom. Only enemies in the active stage animate; hidden rigs and operator models stop their animation groups. A representative desktop gameplay profile dropped from roughly **515 draw calls** to **175–180 draw calls** at **~19–20k visible triangles**, while the zombie wave measured roughly **300 calls**. Open `http://localhost:5173/#debug` for FPS, active meshes, draw calls, triangles, and loaded rigs. Real-device mobile profiling is still required; desktop browser automation is not a mobile GPU benchmark.
 
 ## Mobile
 
